@@ -1,0 +1,6 @@
+{
+  "name": "CyberHUD - Sci-Fi Hacker Terminal Wallpaper",
+  "description": "A futuristic sci-fi hacker green live wallpaper with real-time digital clock, system usage telemetry, matrix rain, network radar, and responsive HUD layout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

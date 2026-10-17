@@ -1,0 +1,11 @@
+[Unit]
+Description=CyberHUD live stats server and wallpaper host
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/node %h/cyberhud/stats-server.mjs
+WorkingDirectory=%h/cyberhud
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

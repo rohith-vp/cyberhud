@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>CyberHUD - Catppuccin Mocha Live Wallpaper</title>
+    <meta name="description" content="A non-interactive Catppuccin Mocha live wallpaper with animated ASCII mountain range, center clock, tactical radar on left, and geo-location world map on right." />
+    <meta property="og:title" content="CyberHUD - Catppuccin Mocha Live Wallpaper" />
+    <meta property="og:description" content="A non-interactive Catppuccin Mocha live wallpaper with animated ASCII mountain range, center clock, tactical radar on left, and geo-location world map on right." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Catppuccin & Terminal Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+
+    <link rel="stylesheet" href="/src/index.css" />
+  </head>
+  <body class="theme-catppuccin-mocha">
+    <!-- Animated ASCII Mountain Canvas Backdrop -->
+    <canvas id="ascii-mountain-canvas" aria-hidden="true"></canvas>
+
+    <!-- Ambience Overlays -->
+    <div class="hud-vignette" aria-hidden="true"></div>
+    <div class="hud-scanlines" aria-hidden="true"></div>
+
+    <!-- Wallpaper Content Viewport (Preserves Top 52px & Bottom 84px Blank Space for OS Panels) -->
+    <div id="wallpaper-viewport" class="hud-wallpaper-viewport">
+      
+      <!-- MAIN 3-COLUMN WALLPAPER GRID -->
+      <main class="hud-wallpaper-grid">
+        
+        <!-- LEFT COLUMN: CPU, THERMALS, TACTICAL RADAR & POWER -->
+        <aside class="hud-side-col hud-col-left" aria-label="Hardware & Radar Telemetry">
+          <!-- CPU & Thermals Card -->
+          <div class="hud-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker"></span>
+                <h3>CPU COMPUTE ARRAY</h3>
+              </div>
+              <span class="hud-card-meta"><span id="cpu-freq-display" class="tabular-nums">4.32</span> GHz</span>
+            </div>
+
+            <div class="hud-card-body">
+              <div class="metric-big-row">
+                <div class="metric-val-wrap">
+                  <span id="cpu-total-percent" class="metric-big-num tabular-nums text-mocha-green">28</span>
+                  <span class="metric-unit">%</span>
+                </div>
+                <div class="metric-sub-stats">
+                  <div class="stat-line">
+                    <span class="stat-lbl">DIE TEMP</span>
+                    <span id="cpu-temp-display" class="stat-txt text-mocha-peach tabular-nums font-mono">44.0°C</span>
+                  </div>
+                  <div class="stat-line">
+                    <span class="stat-lbl">VCORE</span>
+                    <span id="cpu-volt-display" class="stat-txt font-mono tabular-nums text-mocha-sapphire">1.14 V</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Thermal Sensors Matrix -->
+              <div class="thermal-sensor-strip">
+                <div class="thermal-cell">
+                  <span class="sensor-name">CPU</span>
+                  <span id="thermal-cpu" class="sensor-val tabular-nums text-mocha-peach">44.0°</span>
+                </div>
+                <div class="thermal-cell">
+                  <span class="sensor-name">GPU</span>
+                  <span id="thermal-gpu" class="sensor-val tabular-nums text-mocha-peach">51.2°</span>
+                </div>
+                <div class="thermal-cell">
+                  <span class="sensor-name">SSD</span>
+                  <span id="thermal-ssd" class="sensor-val tabular-nums text-mocha-teal">38.5°</span>
+                </div>
+                <div class="thermal-cell">
+                  <span class="sensor-name">FAN</span>
+                  <span id="fan-rpm-display" class="sensor-val tabular-nums text-mocha-subtext">1,680</span>
+                </div>
+              </div>
+
+              <!-- 8-Core workload meters -->
+              <div class="core-mini-strip" id="cpu-cores-container">
+                <!-- 8 core bars -->
+              </div>
+
+              <!-- CPU History Sparkline -->
+              <div class="sparkline-container">
+                <div class="sparkline-info">
+                  <span>60s Load Activity</span>
+                  <span id="cpu-sparkline-peek" class="tabular-nums font-mono text-mocha-lavender">AVG 29%</span>
+                </div>
+                <canvas id="cpu-history-canvas" class="hud-sparkline-canvas" height="30"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tactical Radar Card (Moved to Left) -->
+          <div class="hud-card hud-radar-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-teal"></span>
+                <h3>TACTICAL RADAR</h3>
+              </div>
+              <span class="hud-card-meta">SWEEP: <span id="radar-bearing" class="tabular-nums text-mocha-sapphire">042°</span></span>
+            </div>
+
+            <div class="hud-radar-body">
+              <div class="radar-canvas-wrap">
+                <canvas id="radar-canvas" width="120" height="120"></canvas>
+                <div class="radar-center-blip"></div>
+              </div>
+
+              <div class="radar-info-col">
+                <div class="radar-stat-line">
+                  <span class="stat-lbl">NODES:</span>
+                  <span id="radar-contacts-count" class="stat-txt text-mocha-green font-mono">4 ACTIVE</span>
+                </div>
+                <div class="radar-stat-line">
+                  <span class="stat-lbl">GATEWAY:</span>
+                  <span id="radar-gateway" class="stat-txt font-mono text-mocha-subtext">--</span>
+                </div>
+                <div class="radar-stat-line">
+                  <span class="stat-lbl">LATENCY:</span>
+                  <span id="radar-latency" class="stat-txt font-mono text-mocha-teal">--</span>
+                </div>
+                <div class="radar-stat-line">
+                  <span class="stat-lbl">CIPHER:</span>
+                  <span class="stat-txt font-mono text-mocha-lavender">AES-256</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Power & System Specs Card -->
+          <div class="hud-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-mauve"></span>
+                <h3>POWER & SYSTEM</h3>
+              </div>
+              <span id="battery-status-tag" class="hud-card-meta text-mocha-teal">AC POWER</span>
+            </div>
+
+            <div class="hud-card-body">
+              <div class="power-metric-row">
+                <div class="power-left">
+                  <span id="battery-icon" class="power-glyph text-mocha-yellow">⚡</span>
+                  <div class="power-info-col">
+                    <span class="stat-lbl">BATTERY LEVEL</span>
+                    <span id="battery-level" class="power-val tabular-nums font-mono text-mocha-green">100%</span>
+                  </div>
+                </div>
+                <div class="power-right">
+                  <span class="stat-lbl">STATUS</span>
+                  <span id="battery-state" class="power-sub-txt font-mono text-mocha-teal">CHARGING</span>
+                </div>
+              </div>
+
+              <div class="clean-progress-track">
+                <div id="battery-progress-fill" class="clean-progress-bar bar-teal" style="width: 100%"></div>
+              </div>
+
+              <div class="system-meta-list">
+                <div class="stat-line-spaced">
+                  <span class="stat-lbl">VIEWPORT</span>
+                  <span id="screen-resolution-display" class="stat-txt font-mono tabular-nums text-mocha-subtext">1920×1080</span>
+                </div>
+                <div class="stat-line-spaced">
+                  <span class="stat-lbl">SESSION UPTIME</span>
+                  <span id="uptime-display" class="stat-txt font-mono tabular-nums text-mocha-lavender">00:00:00</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- CENTER COLUMN: ONLY THE CLOCK (MAJESTIC & MINIMAL) -->
+        <section class="hud-center-col" aria-label="Clock Core">
+          <div class="hud-hero-clock-card">
+            
+            <!-- Large Grand Digital Clock -->
+            <div class="hud-clock-stage">
+              <div class="hud-digital-time" id="clock-time-display"><span id="clock-hours" class="tabular-nums">12</span><span class="clock-colon">:</span><span id="clock-minutes" class="tabular-nums">00</span><span class="clock-colon">:</span><span id="clock-seconds" class="tabular-nums">00</span></div>
+            </div>
+
+            <!-- Date Banner Directly Beneath -->
+            <div class="hud-clock-date-banner">
+              <span id="clock-weekday" class="hud-date-day text-mocha-mauve">SATURDAY</span>
+              <span class="hud-date-sep">·</span>
+              <span id="clock-date" class="hud-date-main text-mocha-text">OCTOBER 17, 2026</span>
+            </div>
+
+            <!-- Subtle Timezone & Telemetry Stamp -->
+            <div class="hud-clock-sub-meta">
+              <span id="utc-time-display" class="font-mono tabular-nums text-mocha-subtext">UTC 18:55:00Z</span>
+              <span class="hud-date-sep">·</span>
+              <span class="text-mocha-subtext">DOY <span id="day-of-year" class="tabular-nums">290</span>/365</span>
+              <span class="hud-date-sep">·</span>
+              <span class="hud-status-indicator text-mocha-overlay">CATPPUCCIN MOCHA // NOMINAL</span>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- RIGHT COLUMN: WORLD MAP GEO-LOCATOR, MEMORY & NETWORK -->
+        <aside class="hud-side-col hud-col-right" aria-label="Global Geo Location & Telemetry">
+          <!-- World Map Location Card -->
+          <div class="hud-card hud-map-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-peach"></span>
+                <h3>GLOBAL GEO-LOCATION</h3>
+              </div>
+              <span id="tz-name-badge" class="hud-card-meta text-mocha-peach">TIMEZONE DETECTED</span>
+            </div>
+
+            <div class="hud-card-body">
+              <!-- World Map Canvas with Pulsing Location Beacon -->
+              <div class="world-map-wrap">
+                <canvas id="world-map-canvas" width="280" height="135"></canvas>
+                <!-- Location Target Marker Pill -->
+                <div class="map-location-tag" id="map-location-tag">
+                  <span class="beacon-dot"></span>
+                  <span id="user-location-label" class="font-mono">INITIALIZING GEO...</span>
+                </div>
+              </div>
+
+              <!-- Coordinates & Timezone Readout -->
+              <div class="map-telemetry-row">
+                <div class="map-stat-col">
+                  <span class="stat-lbl">GEO COORDINATES</span>
+                  <span id="geo-coords-display" class="font-mono text-mocha-peach">37.77°N, 122.41°W</span>
+                </div>
+                <div class="map-stat-col text-right">
+                  <span class="stat-lbl">TIMEZONE ZONE</span>
+                  <span id="geo-tz-display" class="font-mono text-mocha-teal">America/Los_Angeles</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Memory & Storage Card -->
+          <div class="hud-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-blue"></span>
+                <h3>MEMORY & STORAGE</h3>
+              </div>
+              <span id="ram-percent-display" class="hud-card-meta tabular-nums text-mocha-mauve">38.4% RAM</span>
+            </div>
+
+            <div class="hud-card-body">
+              <!-- RAM usage -->
+              <div class="storage-block">
+                <div class="stat-line-spaced">
+                  <span class="stat-lbl">DDR5 RAM ALLOCATION</span>
+                  <span id="ram-amount-display" class="stat-txt tabular-nums font-mono text-mocha-lavender">12.3 / 32.0 GB</span>
+                </div>
+                <div class="clean-progress-track">
+                  <div id="ram-progress-fill" class="clean-progress-bar bar-mauve" style="width: 38.4%"></div>
+                </div>
+              </div>
+
+              <!-- Storage (SSD) usage -->
+              <div class="storage-block">
+                <div class="stat-line-spaced">
+                  <span class="stat-lbl">PRIMARY NVMe SSD</span>
+                  <span class="stat-txt tabular-nums font-mono text-mocha-peach"><span id="storage-used">542</span> / <span id="storage-total">1000</span> GB</span>
+                </div>
+                <div class="clean-progress-track">
+                  <div class="clean-progress-bar bar-peach" style="width: 54.2%"></div>
+                </div>
+              </div>
+
+              <!-- SSD I/O Activity -->
+              <div class="io-stat-row">
+                <span class="stat-lbl">NVMe I/O</span>
+                <span class="stat-txt tabular-nums font-mono">
+                  <span class="io-write text-mocha-peach">▲ <span id="io-write-speed">142</span> MB/s</span>
+                  <span class="io-read text-mocha-teal">▼ <span id="io-read-speed">295</span> MB/s</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Network Traffic Card -->
+          <div class="hud-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-sapphire"></span>
+                <h3>NETWORK TRAFFIC</h3>
+              </div>
+              <span id="net-status-badge" class="hud-card-meta text-mocha-teal">ONLINE (14ms)</span>
+            </div>
+
+            <div class="hud-card-body">
+              <div class="metric-big-row">
+                <div class="metric-val-wrap">
+                  <span id="net-rx-rate" class="metric-big-num tabular-nums text-mocha-sapphire">32.4</span>
+                  <span class="metric-unit">MB/s</span>
+                </div>
+                <div class="metric-sub-stats">
+                  <div class="stat-line">
+                    <span class="stat-lbl">RX</span>
+                    <span class="stat-txt text-mocha-sapphire tabular-nums font-mono">▼ <span id="net-rx-display">32.4</span> M/s</span>
+                  </div>
+                  <div class="stat-line">
+                    <span class="stat-lbl">TX</span>
+                    <span class="stat-txt font-mono tabular-nums text-mocha-peach">▲ <span id="net-tx-display">8.6</span> M/s</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Live Traffic Wave Canvas -->
+              <div class="sparkline-container">
+                <canvas id="network-wave-canvas" class="hud-sparkline-canvas" height="30"></canvas>
+              </div>
+            </div>
+          </div>
+          <!-- Audio Spectrum Card -->
+          <div class="hud-card hud-music-card">
+            <div class="hud-card-header">
+              <div class="hud-card-title">
+                <span class="hud-corner-marker marker-mauve"></span>
+                <h3>AUDIO SPECTRUM</h3>
+              </div>
+              <span id="music-status" class="hud-card-meta text-mocha-lavender">NO MEDIA</span>
+            </div>
+            <div class="hud-card-body">
+              <div class="music-meta">
+                <span id="music-title" class="font-mono">No active media player</span>
+                <span id="music-artist" class="stat-lbl">—</span>
+              </div>
+              <canvas id="music-canvas" class="music-canvas"></canvas>
+            </div>
+          </div>
+        </aside>
+
+      </main>
+    </div>
+
+    <!-- Passive Live Wallpaper Engine (Catppuccin Mocha + Animated Mountains + World Map) -->
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

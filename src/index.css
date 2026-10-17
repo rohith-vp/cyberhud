@@ -1,0 +1,811 @@
+/* ==========================================================================
+   CyberHUD - Catppuccin Mocha Live Desktop Wallpaper
+   Authentic Catppuccin Mocha palette with Animated ASCII Mountains,
+   Pure Center Clock, Left Radar, and Right World Map Location Tracker
+   ========================================================================== */
+
+/* Official Catppuccin Mocha Palette */
+:root {
+  --ctp-rosewater: #f5e0dc;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink: #f5c2e7;
+  --ctp-mauve: #cba6f7;
+  --ctp-red: #f38ba8;
+  --ctp-maroon: #eba0ac;
+  --ctp-peach: #fab387;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-sapphire: #74c7ec;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext1: #bac2de;
+  --ctp-subtext0: #a6adc8;
+  --ctp-overlay2: #9399b2;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay0: #6c7086;
+  --ctp-surface2: #585b70;
+  --ctp-surface1: #45475a;
+  --ctp-surface0: #313244;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+
+  /* HUD Semantics */
+  --hud-primary: var(--ctp-green);
+  --hud-glow: rgba(166, 227, 161, 0.40);
+  --hud-glow-soft: rgba(166, 227, 161, 0.12);
+  --hud-bg-canvas: var(--ctp-crust);
+  --hud-card-bg: rgba(24, 24, 37, 0.84);
+  --hud-card-border: rgba(69, 71, 90, 0.58);
+  --hud-card-border-dim: rgba(49, 50, 68, 0.50);
+  --hud-text-bright: var(--ctp-text);
+  --hud-text-normal: var(--ctp-subtext1);
+  --hud-text-muted: var(--ctp-overlay1);
+
+  --font-hud: 'Orbitron', -apple-system, sans-serif;
+  --font-mono: 'Share Tech Mono', 'JetBrains Mono', 'Courier New', monospace;
+  --font-code: 'JetBrains Mono', monospace;
+
+  /* Blank Space for OS Desktop Panels */
+  --panel-top-gap: 52px;
+  --panel-bottom-gap: 84px;
+}
+
+/* Reset & Box Sizing */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--hud-bg-canvas);
+  color: var(--hud-text-normal);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures for non-jitter numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-mono {
+  font-family: var(--font-code);
+}
+
+/* Catppuccin Color Helper Classes */
+.text-mocha-green { color: var(--ctp-green); }
+.text-mocha-mauve { color: var(--ctp-mauve); }
+.text-mocha-peach { color: var(--ctp-peach); }
+.text-mocha-sapphire { color: var(--ctp-sapphire); }
+.text-mocha-lavender { color: var(--ctp-lavender); }
+.text-mocha-teal { color: var(--ctp-teal); }
+.text-mocha-yellow { color: var(--ctp-yellow); }
+.text-mocha-text { color: var(--ctp-text); }
+.text-mocha-subtext { color: var(--ctp-subtext0); }
+.text-mocha-overlay { color: var(--ctp-overlay1); }
+
+/* ==========================================================================
+   ANIMATED ASCII MOUNTAIN BACKDROP CANVAS & AMBIENCE
+   ========================================================================== */
+#ascii-mountain-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.90;
+}
+
+.hud-vignette {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2;
+  background: radial-gradient(circle at center, transparent 55%, rgba(17, 17, 27, 0.75) 100%);
+  pointer-events: none;
+}
+
+.hud-scanlines {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 3;
+  background: linear-gradient(
+    rgba(17, 17, 27, 0) 50%, 
+    rgba(17, 17, 27, 0.20) 50%
+  );
+  background-size: 100% 3px;
+  pointer-events: none;
+  opacity: 0.60;
+}
+
+/* ==========================================================================
+   WALLPAPER VIEWPORT (PRESERVES BLANK SPACE FOR OS PANELS)
+   ========================================================================== */
+.hud-wallpaper-viewport {
+  position: relative;
+  z-index: 10;
+  width: 100vw;
+  height: 100vh;
+  padding-top: var(--panel-top-gap, 52px);
+  padding-bottom: var(--panel-bottom-gap, 84px);
+  padding-left: 24px;
+  padding-right: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* 3-Column Wallpaper Grid */
+.hud-wallpaper-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(290px, 335px) 1fr minmax(290px, 335px);
+  gap: 20px;
+  align-items: center;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Side Columns (Left & Right) */
+.hud-side-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* HUD Card Container */
+.hud-card {
+  position: relative;
+  background: var(--hud-card-bg);
+  border: 1px solid var(--hud-card-border);
+  padding: 8px 12px;
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-radius: 4px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+/* Catppuccin Styled Corner Accents */
+.hud-card::before, .hud-card::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  pointer-events: none;
+}
+
+.hud-card::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--ctp-green);
+  border-left: 2px solid var(--ctp-green);
+  border-top-left-radius: 3px;
+}
+
+.hud-card::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--ctp-green);
+  border-right: 2px solid var(--ctp-green);
+  border-bottom-right-radius: 3px;
+}
+
+.hud-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--hud-card-border-dim);
+  padding-bottom: 4px;
+  font-size: 0.70rem;
+  letter-spacing: 0.08em;
+}
+
+.hud-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-corner-marker {
+  width: 3px;
+  height: 9px;
+  background: var(--ctp-green);
+  box-shadow: 0 0 5px var(--hud-glow);
+  border-radius: 1px;
+}
+
+.marker-mauve { background: var(--ctp-mauve); box-shadow: 0 0 5px rgba(203, 166, 247, 0.4); }
+.marker-blue { background: var(--ctp-blue); box-shadow: 0 0 5px rgba(137, 180, 250, 0.4); }
+.marker-sapphire { background: var(--ctp-sapphire); box-shadow: 0 0 5px rgba(116, 199, 236, 0.4); }
+.marker-lavender { background: var(--ctp-lavender); box-shadow: 0 0 5px rgba(180, 190, 254, 0.4); }
+.marker-teal { background: var(--ctp-teal); box-shadow: 0 0 5px rgba(148, 226, 213, 0.4); }
+.marker-peach { background: var(--ctp-peach); box-shadow: 0 0 5px rgba(250, 179, 135, 0.4); }
+
+.hud-card-title h3 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ctp-text);
+}
+
+.hud-card-meta {
+  color: var(--ctp-subtext0);
+  font-size: 0.68rem;
+  font-family: var(--font-code);
+}
+
+.hud-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* Metric Big Row */
+.metric-big-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.metric-val-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.metric-big-num {
+  font-family: var(--font-hud);
+  font-size: 1.55rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.metric-unit {
+  font-size: 0.68rem;
+  color: var(--ctp-overlay1);
+}
+
+.metric-sub-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.stat-line {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 0.68rem;
+}
+
+.stat-lbl {
+  color: var(--ctp-overlay1);
+  font-size: 0.64rem;
+}
+
+.stat-txt {
+  font-weight: 600;
+}
+
+/* Thermal Sensor Strip */
+.thermal-sensor-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  background: rgba(17, 17, 27, 0.45);
+  padding: 3px 5px;
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 2px;
+}
+
+.thermal-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.sensor-name {
+  font-size: 0.58rem;
+  color: var(--ctp-overlay1);
+}
+
+.sensor-val {
+  font-size: 0.68rem;
+  font-family: var(--font-code);
+  font-weight: 600;
+}
+
+/* Mini 8-Core workload strip */
+.core-mini-strip {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  background: rgba(17, 17, 27, 0.50);
+  padding: 3px;
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 2px;
+}
+
+.core-mini-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.core-mini-bar {
+  width: 100%;
+  height: 11px;
+  background: rgba(49, 50, 68, 0.45);
+  display: flex;
+  align-items: flex-end;
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.core-mini-fill {
+  width: 100%;
+  background: var(--ctp-green);
+  height: 30%;
+  transition: height 0.4s ease;
+  box-shadow: 0 0 4px var(--hud-glow-soft);
+}
+
+.core-mini-lbl {
+  font-size: 0.56rem;
+  color: var(--ctp-overlay1);
+  text-align: center;
+}
+
+/* Sparklines */
+.sparkline-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sparkline-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.62rem;
+  color: var(--ctp-overlay1);
+}
+
+.hud-sparkline-canvas {
+  width: 100%;
+  height: 30px;
+  background: rgba(17, 17, 27, 0.5);
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 2px;
+  display: block;
+}
+
+/* Tactical Radar (Left Column Placement) */
+.hud-radar-card {
+  padding: 8px 12px;
+}
+
+.hud-radar-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.radar-canvas-wrap {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, rgba(148, 226, 213, 0.08) 0%, transparent 70%);
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 50%;
+}
+
+#radar-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+}
+
+.radar-center-blip {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: var(--ctp-teal);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--ctp-teal);
+}
+
+.radar-info-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+}
+
+.radar-stat-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+
+/* Power & Battery Telemetry */
+.power-metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.power-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.power-glyph {
+  font-size: 1.2rem;
+  text-shadow: 0 0 8px rgba(249, 226, 175, 0.4);
+}
+
+.power-info-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.power-val {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.power-sub-txt {
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.system-meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--hud-card-border-dim);
+}
+
+.stat-line-spaced {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.66rem;
+}
+
+/* Clean Progress Bars */
+.clean-progress-track {
+  width: 100%;
+  height: 5px;
+  background: rgba(49, 50, 68, 0.5);
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.clean-progress-bar {
+  height: 100%;
+  background: var(--ctp-green);
+  transition: width 0.4s ease;
+  border-radius: 1px;
+}
+
+.bar-teal { background: var(--ctp-teal); box-shadow: 0 0 5px rgba(148, 226, 213, 0.4); }
+.bar-mauve { background: var(--ctp-mauve); box-shadow: 0 0 5px rgba(203, 166, 247, 0.4); }
+.bar-peach { background: var(--ctp-peach); box-shadow: 0 0 5px rgba(250, 179, 135, 0.4); }
+
+/* Storage & RAM Blocks */
+.storage-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.io-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.66rem;
+  padding-top: 2px;
+  border-top: 1px solid var(--hud-card-border-dim);
+}
+
+/* ==========================================================================
+   RIGHT COLUMN: WORLD MAP GEO-LOCATION CARD
+   ========================================================================== */
+.hud-map-card {
+  padding: 8px 12px;
+}
+
+.world-map-wrap {
+  position: relative;
+  width: 100%;
+  height: 125px;
+  background: rgba(17, 17, 27, 0.60);
+  border: 1px solid var(--hud-card-border-dim);
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#world-map-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.map-location-tag {
+  position: absolute;
+  bottom: 4px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(24, 24, 37, 0.85);
+  border: 1px solid var(--hud-card-border-dim);
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-size: 0.60rem;
+  color: var(--ctp-text);
+  backdrop-filter: blur(4px);
+}
+
+.beacon-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--ctp-peach);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--ctp-peach);
+  animation: pulse-beacon 1.4s infinite ease-in-out;
+}
+
+@keyframes pulse-beacon {
+  0%, 100% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 10px var(--ctp-peach); }
+}
+
+.map-telemetry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.65rem;
+  padding-top: 2px;
+}
+
+.map-stat-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.text-right {
+  text-align: right;
+}
+
+/* ==========================================================================
+   CENTER COLUMN: ONLY THE GRAND DIGITAL CLOCK
+   ========================================================================== */
+.hud-center-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.hud-hero-clock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 20px;
+  background: radial-gradient(circle at center, rgba(30, 30, 46, 0.65) 0%, transparent 75%);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.hud-clock-stage {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  justify-content: center;
+  text-align: center;
+  gap: clamp(6px, 1vw, 14px);
+  width: 100%;
+  max-width: 100%;
+  white-space: nowrap !important;
+}
+
+/* Grand Digital Clock Numbers (Catppuccin Green / Mocha Glow) - Sized strictly based on screen width */
+.hud-digital-time {
+  font-family: var(--font-hud);
+  font-size: clamp(2.2rem, 4.6vw, 5.6rem);
+  font-weight: 900;
+  color: var(--ctp-green);
+  letter-spacing: 0.05em;
+  line-height: 1;
+  white-space: nowrap !important;
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  justify-content: center;
+  flex-shrink: 0;
+  text-shadow: 
+    0 0 16px rgba(166, 227, 161, 0.45), 
+    0 0 36px rgba(166, 227, 161, 0.20),
+    0 0 65px rgba(166, 227, 161, 0.12);
+}
+
+.hud-digital-time span {
+  white-space: nowrap !important;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+
+
+.clock-colon {
+  animation: blink-colon 1.5s infinite step-start;
+  color: var(--ctp-mauve);
+  margin: 0 1px;
+}
+
+@keyframes blink-colon {
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.25; }
+}
+
+/* Date Banner */
+.hud-clock-date-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: clamp(0.85rem, 1.25vw, 1.25rem);
+  letter-spacing: 0.15em;
+  border-top: 1px solid var(--hud-card-border-dim);
+  border-bottom: 1px solid var(--hud-card-border-dim);
+  padding: 6px 20px;
+  white-space: nowrap !important;
+  max-width: 100%;
+}
+
+.hud-date-day {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hud-date-main {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hud-date-sep {
+  color: var(--ctp-overlay0);
+  opacity: 0.7;
+}
+
+/* Subtle Sub Meta */
+.hud-clock-sub-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: clamp(0.64rem, 0.8vw, 0.78rem);
+  letter-spacing: 0.08em;
+  white-space: nowrap !important;
+  max-width: 100%;
+}
+
+.hud-status-indicator {
+  font-size: 0.9em;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   RESPONSIVE LAYOUT
+   ========================================================================== */
+@media (min-width: 2100px) {
+  .hud-wallpaper-grid {
+    grid-template-columns: 380px 1fr 380px;
+    gap: 32px;
+  }
+  .hud-digital-time {
+    font-size: clamp(4.2rem, 5.0vw, 7.2rem);
+  }
+  .radar-canvas-wrap {
+    width: 124px;
+    height: 124px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .hud-wallpaper-grid {
+    grid-template-columns: 270px 1fr 270px;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 960px) {
+  html, body {
+    overflow-y: auto;
+  }
+  .hud-wallpaper-viewport {
+    height: auto;
+    min-height: 100vh;
+  }
+  .hud-wallpaper-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .hud-center-col {
+    order: -1;
+    padding: 16px 0;
+  }
+}
+
+/* Audio spectrum card */
+.music-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+#music-title {
+  color: var(--ctp-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.music-canvas {
+  display: block;
+  width: 100%;
+  height: 56px;
+}
