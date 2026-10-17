@@ -104,7 +104,7 @@ Some values aren't exposed by typical operating systems or sensors. They show `N
 ## Installation
 
 ```bash
-git clone https://github.com/rohith-vp/cyberhud.git cyberhud
+git clone https://github.com/rohith-vp/cyberhud
 cd cyberhud
 npm install
 npm run build
@@ -144,7 +144,15 @@ The service file assumes the project lives at `~/cyberhud` and that Node is at `
 
 Point your wallpaper host at `http://127.0.0.1:7777`. The helper must be running for live data to show.
 
-Options depend on your desktop environment. For example, on Windows, Lively Wallpaper can display a web URL as a wallpaper. Linux and macOS need a third-party tool that supports web-page wallpapers.
+### KDE Plasma
+
+1. Right-click the desktop and choose **Configure Desktop and Wallpaper…**.
+2. Click **Get New Plugins**, search for **HTMLWallpaper**, and install it.
+3. Set the wallpaper type to **HTMLWallpaper** and enter `http://127.0.0.1:7777` as the URL.
+
+### Other desktops
+
+On Windows, Lively Wallpaper can display a web URL as a wallpaper. macOS and other Linux desktops need a third-party tool that supports web-page wallpapers.
 
 ## Configuration
 
