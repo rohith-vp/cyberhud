@@ -133,12 +133,12 @@ Then open:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp cyberhud-stats.service ~/.config/systemd/user/
+cp cyberhud.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now cyberhud-stats.service
+systemctl --user enable --now cyberhud.service
 ```
 
-The service file assumes the project lives at `~/cyberhud` and that Node is at `/usr/bin/node`. Edit `cyberhud-stats.service` if your paths differ.
+The service file assumes the project lives at `~/cyberhud` and that Node is at `/usr/bin/node`. Edit `cyberhud.service` if your paths differ.
 
 ## Setting the wallpaper
 
@@ -164,7 +164,7 @@ cyberhud/
 │   └── main.ts             Canvas animations, clock, and telemetry rendering
 ├── stats-server.mjs        Local helper: collects stats and serves the page
 ├── music.mjs               Audio capture, FFT, and media track info
-├── cyberhud-stats.service  systemd user service for the helper
+├── cyberhud.service  systemd user service for the helper
 ├── docs/screenshots/       Screenshots used in this README
 ├── tsconfig.json           TypeScript configuration
 ├── package.json
