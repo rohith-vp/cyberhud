@@ -104,7 +104,7 @@ Some values aren't exposed by typical operating systems or sensors. They show `N
 ## Installation
 
 ```bash
-git clone <your-repo-url> cyberhud
+git clone https://github.com/rohith-vp/cyberhud.git cyberhud
 cd cyberhud
 npm install
 npm run build
@@ -207,7 +207,3 @@ The page uses no UI framework, and the styles are hand-written CSS.
 - The radar and cipher label are decorative.
 - The map location uses a timezone lookup table, not GPS, so the marker is approximate.
 - Network totals include all active interfaces, including VPN and virtual adapters.
-
-## License
-
-Add a license before publishing, for example MIT.
