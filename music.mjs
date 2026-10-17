@@ -14,7 +14,7 @@ export const HOP = 512;      // new samples between FFTs (~86 updates/s)
 export const BANDS = 24;     // frequency bars shown on the page
 const F_MIN = 40;            // lowest band edge (Hz)
 const F_MAX = 16000;         // highest band edge (Hz)
-const META_INTERVAL_MS = 2000;
+const META_INTERVAL_MS = 1000;
 
 // Hann window reduces spectral leakage between bins.
 const HANN = Float32Array.from(
@@ -114,28 +114,48 @@ function onAudio(buf) {
   }
 }
 
+// The capture process is only running while a player reports "Playing".
+// PipeWire shows a recording indicator for any active capture stream, so
+// stopping it when playback ends keeps the indicator off the rest of the time.
 let capture = null;
 let captureMissing = false;
-let stopping = false;
 
 function startCapture() {
-  capture = spawn(
+  const proc = spawn(
     'parec',
     ['-d', '@DEFAULT_MONITOR@', '--format=s16le', `--rate=${RATE}`, '--channels=1', '--latency-msec=30'],
     { stdio: ['ignore', 'pipe', 'ignore'] }
   );
-  capture.stdout.on('data', onAudio);
-  capture.on('error', (err) => {
-    capture = null;
+  capture = proc;
+  proc.stdout.on('data', (buf) => {
+    if (capture === proc) onAudio(buf);
+  });
+  proc.on('error', (err) => {
+    if (capture === proc) capture = null;
     if (err.code === 'ENOENT') {
       captureMissing = true;
       console.warn('music: parec not found. Install libpulse to enable the spectrum.');
     }
   });
-  capture.on('exit', () => {
-    capture = null;
-    if (!captureMissing && !stopping) setTimeout(startCapture, 3000);
+  proc.on('exit', () => {
+    if (capture === proc) capture = null;
   });
+}
+
+function stopCapture() {
+  if (capture) {
+    const proc = capture;
+    capture = null;
+    proc.kill();
+  }
+  smoothed.fill(0);
+  bandsOut = new Array(BANDS).fill(0);
+}
+
+function syncCapture() {
+  const playing = meta.status === 'Playing';
+  if (playing && !capture && !captureMissing) startCapture();
+  else if (!playing && capture) stopCapture();
 }
 
 // --- Track metadata ---------------------------------------------------------
@@ -194,9 +214,13 @@ async function pollMeta() {
 // --- Public API -------------------------------------------------------------
 
 export function startMusic() {
-  startCapture();
-  pollMeta();
-  setInterval(pollMeta, META_INTERVAL_MS);
+  let timer = null;
+  const tick = async () => {
+    await pollMeta();
+    syncCapture();
+  };
+  tick();
+  timer = setInterval(tick, META_INTERVAL_MS);
   return {
     state: () => ({
       ...meta,
@@ -204,8 +228,8 @@ export function startMusic() {
       bands: meta.status === 'Playing' ? bandsOut : new Array(BANDS).fill(0),
     }),
     stop: () => {
-      stopping = true;
-      capture?.kill();
+      clearInterval(timer);
+      stopCapture();
     },
   };
 }
