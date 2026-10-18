@@ -3,6 +3,10 @@ Description=CyberHUD live stats server and wallpaper host
 After=graphical-session.target
 
 [Service]
+# Resource limits: the helper is light, these cap it if something misbehaves.
+Nice=10
+MemoryMax=150M
+CPUQuota=15%
 ExecStart=/usr/bin/node %h/cyberhud/stats-server.mjs
 WorkingDirectory=%h/cyberhud
 Restart=on-failure

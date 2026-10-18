@@ -14,7 +14,7 @@ export const HOP = 512;      // new samples between FFTs (~86 updates/s)
 export const BANDS = 24;     // frequency bars shown on the page
 const F_MIN = 40;            // lowest band edge (Hz)
 const F_MAX = 16000;         // highest band edge (Hz)
-const META_INTERVAL_MS = 1000;
+const META_INTERVAL_MS = 2000; // each check starts a playerctl process
 
 // Hann window reduces spectral leakage between bins.
 const HANN = Float32Array.from(

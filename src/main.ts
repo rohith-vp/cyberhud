@@ -43,236 +43,323 @@ const CTP = {
 function initAnimatedAsciiMountains() {
   const canvas = document.getElementById('ascii-mountain-canvas') as HTMLCanvasElement | null;
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  const charW = 9;
-  const charH = 15;
-  let cols = 0;
-  let rows = 0;
-
-  interface Star {
-    xRatio: number;
-    yRatio: number;
-    char: string;
-    speed: number;
-    phase: number;
-    color: string;
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false });
+  if (!gl) {
+    console.warn('Mountains: WebGL is not available.');
+    return;
   }
-  let stars: Star[] = [];
+  const g: WebGLRenderingContext = gl;
 
-  let offsetFar = 0;
-  let offsetMid = 0;
-  let offsetNear = 0;
+  const CHAR_W = 9;
+  const CHAR_H = 15;
+  const CELL = 16;
+  const FONT = `13px 'JetBrains Mono', 'Share Tech Mono', monospace`;
+  // Index of each glyph in the atlas. The shader refers to glyphs by these indices.
+  const GLYPHS = ['^', '/', '\\', '_', ':', '.', '#', '%', '|', '~', '=', '-', '·', '*', '+', '✦', '°'];
 
-  function resize() {
-    if (!canvas) return;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    cols = Math.ceil(canvas.width / charW) + 2;
-    rows = Math.ceil(canvas.height / charH) + 2;
+  // Converts a Catppuccin hex colour to a GLSL vec3 literal.
+  const rgb = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `vec3(${((n >> 16) & 255) / 255}, ${((n >> 8) & 255) / 255}, ${(n & 255) / 255})`;
+  };
 
-    stars = [];
-    const starCount = Math.floor(cols * 1.6);
-    const starChars = ['·', '·', '*', '+', '✦', '°', '.'];
-    const starColors = [CTP.lavender, CTP.rosewater, CTP.sky, CTP.text, CTP.subtext0];
+  const VERT = `
+    attribute vec2 a_pos;
+    void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+  `;
 
-    for (let i = 0; i < starCount; i++) {
-      stars.push({
-        xRatio: Math.random(),
-        yRatio: Math.random() * 0.42,
-        char: starChars[Math.floor(Math.random() * starChars.length)],
-        speed: 1.5 + Math.random() * 3.5,
-        phase: Math.random() * Math.PI * 2,
-        color: starColors[Math.floor(Math.random() * starColors.length)]
-      });
-    }
-  }
+  const FRAG = `
+    precision highp float;
 
-  window.addEventListener('resize', resize);
-  resize();
+    uniform vec2 u_res;
+    uniform float u_cols;
+    uniform float u_rows;
+    uniform float u_time;
+    uniform float u_atlasW;
+    uniform sampler2D u_atlas;
 
-  function getFarHeight(c: number, offset: number): number {
-    const nx = (c + offset) / cols;
-    const h1 = Math.sin(nx * Math.PI * 4.2 + 0.5) * 0.16;
-    const h2 = Math.sin(nx * Math.PI * 8.6 + 1.2) * 0.08;
-    const h3 = Math.cos(nx * Math.PI * 16.4) * 0.035;
-    const valleyDip = Math.sin(nx * Math.PI * 2.0) * 0.05;
-    const norm = 0.44 - (h1 + h2 + h3 + valleyDip);
-    return Math.floor(norm * rows);
-  }
+    const float PI = 3.14159265;
+    const float CW = ${CHAR_W}.0;
+    const float CH = ${CHAR_H}.0;
+    const float CELL = ${CELL}.0;
 
-  function getMidHeight(c: number, offset: number): number {
-    const nx = (c + offset) / cols;
-    const h1 = Math.cos(nx * Math.PI * 5.4 + 2.1) * 0.14;
-    const h2 = Math.sin(nx * Math.PI * 11.2 + 0.8) * 0.06;
-    const h3 = Math.sin(nx * Math.PI * 22.0) * 0.025;
-    const norm = 0.58 - (h1 + h2 + h3);
-    return Math.floor(norm * rows);
-  }
+    const vec3 C_LAV = ${rgb(CTP.lavender)};
+    const vec3 C_ROSE = ${rgb(CTP.rosewater)};
+    const vec3 C_SKY = ${rgb(CTP.sky)};
+    const vec3 C_TEXT = ${rgb(CTP.text)};
+    const vec3 C_SUB = ${rgb(CTP.subtext0)};
+    const vec3 C_SAPPHIRE = ${rgb(CTP.sapphire)};
+    const vec3 C_BLUE = ${rgb(CTP.blue)};
+    const vec3 C_TEAL = ${rgb(CTP.teal)};
+    const vec3 C_GREEN = ${rgb(CTP.green)};
+    const vec3 C_SURF0 = ${rgb(CTP.surface0)};
+    const vec3 C_SURF1 = ${rgb(CTP.surface1)};
 
-  function getNearHeight(c: number, offset: number): number {
-    const nx = (c + offset) / cols;
-    const h1 = Math.sin(nx * Math.PI * 3.2 + 1.4) * 0.09;
-    const h2 = Math.cos(nx * Math.PI * 7.5) * 0.04;
-    const norm = 0.74 - (h1 + h2);
-    return Math.floor(norm * rows);
-  }
-
-  let lastTime = 0;
-
-  function render(time: number) {
-    requestAnimationFrame(render);
-    if (!ctx || !canvas) return;
-
-    const delta = time - lastTime;
-    if (delta < 33) return;
-    lastTime = time;
-
-    offsetFar += 0.035;
-    offsetMid += 0.085;
-    offsetNear += 0.16;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = `13px 'JetBrains Mono', 'Share Tech Mono', monospace`;
-    ctx.textBaseline = 'top';
-
-    const nowSec = time / 1000;
-
-    // 1. Draw Twinkling Stars
-    stars.forEach(star => {
-      const sineVal = Math.sin(nowSec * star.speed + star.phase);
-      const alpha = Math.max(0.12, Math.min(0.98, (sineVal + 1) / 2));
-      const sx = Math.floor(star.xRatio * cols) * charW;
-      const sy = Math.floor(star.yRatio * rows) * charH;
-
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = star.color;
-      const glyph = alpha > 0.82 ? '✦' : alpha > 0.5 ? star.char : '·';
-      ctx.fillText(glyph, sx, sy);
-    });
-
-    const farHeights: number[] = new Array(cols);
-    const midHeights: number[] = new Array(cols);
-    const nearHeights: number[] = new Array(cols);
-
-    for (let c = 0; c < cols; c++) {
-      farHeights[c] = getFarHeight(c, offsetFar);
-      midHeights[c] = getMidHeight(c, offsetMid);
-      nearHeights[c] = getNearHeight(c, offsetNear);
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
 
-    // 2. Far Peaks (Lavender / Surface)
-    ctx.globalAlpha = 0.65;
-    for (let c = 0; c < cols; c++) {
-      const peakY = farHeights[c];
-      const prevY = farHeights[c - 1] ?? peakY;
-      const nextY = farHeights[c + 1] ?? peakY;
+    // Terrain heights in rows. These match the original 2D formulas.
+    float farH(float c, float off) {
+      float nx = (c + off) / u_cols;
+      float n = 0.44 - (sin(nx * PI * 4.2 + 0.5) * 0.16
+                      + sin(nx * PI * 8.6 + 1.2) * 0.08
+                      + cos(nx * PI * 16.4) * 0.035
+                      + sin(nx * PI * 2.0) * 0.05);
+      return floor(n * u_rows);
+    }
+    float midH(float c, float off) {
+      float nx = (c + off) / u_cols;
+      float n = 0.58 - (cos(nx * PI * 5.4 + 2.1) * 0.14
+                      + sin(nx * PI * 11.2 + 0.8) * 0.06
+                      + sin(nx * PI * 22.0) * 0.025);
+      return floor(n * u_rows);
+    }
+    float nearH(float c, float off) {
+      float nx = (c + off) / u_cols;
+      float n = 0.74 - (sin(nx * PI * 3.2 + 1.4) * 0.09 + cos(nx * PI * 7.5) * 0.04);
+      return floor(n * u_rows);
+    }
 
-      for (let r = peakY; r < rows; r++) {
-        const depth = r - peakY;
-        let char = ' ';
-        let color = CTP.surface2;
-
-        if (depth === 0) {
-          if (prevY > peakY && nextY > peakY) { char = '^'; color = CTP.lavender; }
-          else if (prevY > peakY) { char = '/'; color = CTP.lavender; }
-          else if (nextY > peakY) { char = '\\'; color = CTP.lavender; }
-          else { char = '_'; color = CTP.lavender; }
-        } else if (depth <= 2) {
-          char = (c + r) % 2 === 0 ? ':' : '.';
-          color = CTP.text;
-        } else if (depth <= 6) {
-          char = (c * 3 + r) % 4 === 0 ? '#' : (c + r) % 3 === 0 ? '/' : ':';
-          color = CTP.surface1;
-        } else {
-          char = (c + r) % 5 === 0 ? '.' : ' ';
-          color = CTP.surface0;
-        }
-
-        if (char !== ' ') {
-          ctx.fillStyle = color;
-          ctx.fillText(char, c * charW, r * charH);
-        }
+    // Each layer returns a glyph index (see GLYPHS in the script), or -1 for empty.
+    float farGlyph(float c, float r, out vec3 col) {
+      float off = u_time * 1.05;
+      float pk = farH(c, off);
+      float pv = farH(c - 1.0, off);
+      float nx = farH(c + 1.0, off);
+      col = C_SURF0;
+      if (r < pk) return -1.0;
+      float d = r - pk;
+      if (d < 0.5) {
+        col = C_LAV;
+        if (pv > pk && nx > pk) return 0.0;
+        if (pv > pk) return 1.0;
+        if (nx > pk) return 2.0;
+        return 3.0;
       }
-    }
-
-    // 3. Mid Ridges (Sapphire / Blue)
-    ctx.globalAlpha = 0.85;
-    for (let c = 0; c < cols; c++) {
-      const peakY = midHeights[c];
-      const prevY = midHeights[c - 1] ?? peakY;
-      const nextY = midHeights[c + 1] ?? peakY;
-
-      for (let r = peakY; r < rows; r++) {
-        const depth = r - peakY;
-        let char = ' ';
-        let color = CTP.sapphire;
-
-        if (depth === 0) {
-          if (prevY > peakY && nextY > peakY) { char = '/\\'; color = CTP.sapphire; }
-          else if (prevY > peakY) { char = '//'; color = CTP.sky; }
-          else if (nextY > peakY) { char = '\\\\'; color = CTP.blue; }
-          else { char = '^^'; color = CTP.sapphire; }
-        } else if (depth === 1) {
-          char = (c % 2 === 0) ? '/\\' : '::';
-          color = CTP.blue;
-        } else if (depth <= 4) {
-          const mod = (c * 2 + r) % 6;
-          char = mod === 0 ? '#' : mod === 1 ? '%' : mod === 2 ? '/' : ':';
-          color = CTP.blue;
-        } else if (depth <= 9) {
-          char = (c + r) % 3 === 0 ? '|' : (c * 2 + r) % 4 === 0 ? ':' : '.';
-          color = CTP.surface1;
-        } else {
-          char = (c + r) % 7 === 0 ? '.' : ' ';
-          color = CTP.surface0;
-        }
-
-        if (char !== ' ') {
-          ctx.fillStyle = color;
-          ctx.fillText(char, c * charW, r * charH);
-        }
+      if (d <= 2.5) {
+        col = C_TEXT;
+        return mod(c + r, 2.0) < 0.5 ? 4.0 : 5.0;
       }
-    }
-
-    // 4. Near Foothills (Teal / Green)
-    ctx.globalAlpha = 0.95;
-    for (let c = 0; c < cols; c++) {
-      const peakY = nearHeights[c];
-      const prevY = nearHeights[c - 1] ?? peakY;
-      const nextY = nearHeights[c + 1] ?? peakY;
-
-      for (let r = peakY; r < rows; r++) {
-        const depth = r - peakY;
-        let char = ' ';
-        let color = CTP.teal;
-
-        if (depth === 0) {
-          if (prevY > peakY) char = '/';
-          else if (nextY > peakY) char = '\\';
-          else char = '_';
-          color = CTP.green;
-        } else if (depth <= 3) {
-          const mod = (c + r * 2) % 5;
-          char = mod === 0 ? '/' : mod === 1 ? '\\' : mod === 2 ? '~' : '=';
-          color = CTP.teal;
-        } else {
-          char = (c + r) % 4 === 0 ? '-' : (c * 3 + r) % 5 === 0 ? '~' : '.';
-          color = CTP.surface1;
-        }
-
-        if (char !== ' ') {
-          ctx.fillStyle = color;
-          ctx.fillText(char, c * charW, r * charH);
-        }
+      if (d <= 6.5) {
+        col = C_SURF1;
+        if (mod(c * 3.0 + r, 4.0) < 0.5) return 6.0;
+        if (mod(c + r, 3.0) < 0.5) return 1.0;
+        return 4.0;
       }
+      col = C_SURF0;
+      return mod(c + r, 5.0) < 0.5 ? 5.0 : -1.0;
     }
 
-    ctx.globalAlpha = 1.0;
+    float midGlyph(float c, float r, out vec3 col) {
+      float off = u_time * 2.55;
+      float pk = midH(c, off);
+      float pv = midH(c - 1.0, off);
+      float nx = midH(c + 1.0, off);
+      col = C_SAPPHIRE;
+      if (r < pk) return -1.0;
+      float d = r - pk;
+      if (d < 0.5) {
+        if (pv > pk && nx > pk) { col = C_SAPPHIRE; return 0.0; }
+        if (pv > pk) { col = C_SKY; return 1.0; }
+        if (nx > pk) { col = C_BLUE; return 2.0; }
+        col = C_SAPPHIRE;
+        return 0.0;
+      }
+      if (d < 1.5) {
+        col = C_BLUE;
+        return mod(c, 2.0) < 0.5 ? 1.0 : 4.0;
+      }
+      if (d <= 4.5) {
+        col = C_BLUE;
+        float m = mod(c * 2.0 + r, 6.0);
+        if (m < 0.5) return 6.0;
+        if (m < 1.5) return 7.0;
+        if (m < 2.5) return 1.0;
+        return 4.0;
+      }
+      if (d <= 9.5) {
+        col = C_SURF1;
+        if (mod(c + r, 3.0) < 0.5) return 8.0;
+        if (mod(c * 2.0 + r, 4.0) < 0.5) return 4.0;
+        return 5.0;
+      }
+      col = C_SURF0;
+      return mod(c + r, 7.0) < 0.5 ? 5.0 : -1.0;
+    }
+
+    float nearGlyph(float c, float r, out vec3 col) {
+      float off = u_time * 4.8;
+      float pk = nearH(c, off);
+      float pv = nearH(c - 1.0, off);
+      float nx = nearH(c + 1.0, off);
+      col = C_GREEN;
+      if (r < pk) return -1.0;
+      float d = r - pk;
+      if (d < 0.5) {
+        if (pv > pk) return 1.0;
+        if (nx > pk) return 2.0;
+        return 3.0;
+      }
+      if (d <= 3.5) {
+        col = C_TEAL;
+        float m = mod(c + r * 2.0, 5.0);
+        if (m < 0.5) return 1.0;
+        if (m < 1.5) return 2.0;
+        if (m < 2.5) return 9.0;
+        return 10.0;
+      }
+      col = C_SURF1;
+      if (mod(c + r, 4.0) < 0.5) return 11.0;
+      if (mod(c * 3.0 + r, 5.0) < 0.5) return 9.0;
+      return 5.0;
+    }
+
+    // Twinkling stars: at most one per cell, in the top 42% of the screen.
+    float starGlyph(float c, float r, out vec3 col, out float alpha) {
+      alpha = 0.0;
+      col = C_TEXT;
+      if (r >= 0.42 * u_rows) return -1.0;
+      float density = 1.6 / (0.42 * u_rows);
+      if (hash(vec2(c, r)) > density) return -1.0;
+      float speed = 1.5 + 3.5 * hash(vec2(c + 11.0, r + 3.0));
+      float phase = 6.2831853 * hash(vec2(c + 5.0, r + 17.0));
+      alpha = clamp((sin(u_time * speed + phase) + 1.0) * 0.5, 0.12, 0.98);
+      float hc = hash(vec2(c + 23.0, r + 7.0));
+      col = hc < 0.2 ? C_LAV : hc < 0.4 ? C_ROSE : hc < 0.6 ? C_SKY : hc < 0.8 ? C_TEXT : C_SUB;
+      if (alpha > 0.82) return 15.0;
+      if (alpha > 0.5) {
+        float k = floor(hash(vec2(c + 31.0, r + 13.0)) * 7.0);
+        return k < 2.0 ? 12.0 : k < 3.0 ? 13.0 : k < 4.0 ? 14.0 : k < 5.0 ? 15.0 : k < 6.0 ? 16.0 : 5.0;
+      }
+      return 12.0;
+    }
+
+    vec4 glyphSrc(float g, vec3 col, float alpha, vec2 local) {
+      vec2 uv = vec2((g * CELL + local.x + 0.5) / u_atlasW, (local.y + 0.5) / CELL);
+      float cov = texture2D(u_atlas, uv).a * alpha;
+      return vec4(col * cov, cov);
+    }
+
+    // Premultiplied "over" compositing: src drawn on top of dst.
+    vec4 over(vec4 src, vec4 dst) {
+      return src + dst * (1.0 - src.a);
+    }
+
+    void main() {
+      vec2 p = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y);
+      float c = floor(p.x / CW);
+      float r = floor(p.y / CH);
+      vec2 local = vec2(mod(p.x, CW), mod(p.y, CH));
+
+      vec4 acc = vec4(0.0);
+      vec3 col;
+      float alpha;
+
+      float g = starGlyph(c, r, col, alpha);
+      if (g >= 0.0) acc = over(glyphSrc(g, col, alpha, local), acc);
+
+      g = farGlyph(c, r, col);
+      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.65, local), acc);
+
+      g = midGlyph(c, r, col);
+      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.85, local), acc);
+
+      g = nearGlyph(c, r, col);
+      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.95, local), acc);
+
+      gl_FragColor = acc;
+    }
+  `;
+
+  function compile(type: number, src: string): WebGLShader {
+    const shader = g.createShader(type);
+    if (!shader) throw new Error('createShader failed');
+    g.shaderSource(shader, src);
+    g.compileShader(shader);
+    if (!g.getShaderParameter(shader, g.COMPILE_STATUS)) {
+      throw new Error(g.getShaderInfoLog(shader) || 'shader compile failed');
+    }
+    return shader;
   }
 
-  requestAnimationFrame(render);
+  async function start() {
+    // Wait for the font so the glyph atlas uses it.
+    await document.fonts.load(FONT).catch(() => undefined);
+
+    // Draw each glyph once into a strip of atlas cells.
+    const atlas = document.createElement('canvas');
+    atlas.width = CELL * GLYPHS.length;
+    atlas.height = CELL;
+    const actx = atlas.getContext('2d');
+    if (!actx) throw new Error('2D context unavailable for the glyph atlas');
+    actx.font = FONT;
+    actx.textBaseline = 'top';
+    actx.fillStyle = '#ffffff';
+    GLYPHS.forEach((ch, i) => actx.fillText(ch, i * CELL, 0));
+
+    const program = g.createProgram();
+    if (!program) throw new Error('createProgram failed');
+    g.attachShader(program, compile(g.VERTEX_SHADER, VERT));
+    g.attachShader(program, compile(g.FRAGMENT_SHADER, FRAG));
+    g.linkProgram(program);
+    if (!g.getProgramParameter(program, g.LINK_STATUS)) {
+      throw new Error(g.getProgramInfoLog(program) || 'program link failed');
+    }
+    g.useProgram(program);
+
+    // One full-screen quad.
+    const buffer = g.createBuffer();
+    g.bindBuffer(g.ARRAY_BUFFER, buffer);
+    g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
+    const aPos = g.getAttribLocation(program, 'a_pos');
+    g.enableVertexAttribArray(aPos);
+    g.vertexAttribPointer(aPos, 2, g.FLOAT, false, 0, 0);
+
+    const texture = g.createTexture();
+    g.bindTexture(g.TEXTURE_2D, texture);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
+    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+    g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, atlas);
+
+    const uRes = g.getUniformLocation(program, 'u_res');
+    const uCols = g.getUniformLocation(program, 'u_cols');
+    const uRows = g.getUniformLocation(program, 'u_rows');
+    const uTime = g.getUniformLocation(program, 'u_time');
+    const uAtlasW = g.getUniformLocation(program, 'u_atlasW');
+    const uAtlas = g.getUniformLocation(program, 'u_atlas');
+    g.uniform1i(uAtlas, 0);
+    g.uniform1f(uAtlasW, atlas.width);
+
+    let cols = 0;
+    let rows = 0;
+    function resize() {
+      canvas!.width = window.innerWidth;
+      canvas!.height = window.innerHeight;
+      g.viewport(0, 0, canvas!.width, canvas!.height);
+      cols = Math.ceil(canvas!.width / CHAR_W) + 2;
+      rows = Math.ceil(canvas!.height / CHAR_H) + 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const t0 = performance.now();
+    // Redraws 30 times a second. The GPU does the per-pixel work.
+    function draw() {
+      setTimeout(draw, 33);
+      g.uniform2f(uRes, canvas!.width, canvas!.height);
+      g.uniform1f(uCols, cols);
+      g.uniform1f(uRows, rows);
+      g.uniform1f(uTime, (performance.now() - t0) / 1000);
+      g.clear(g.COLOR_BUFFER_BIT);
+      g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+    }
+    draw();
+  }
+
+  start().catch((err) => console.error('Mountains failed to start:', err));
 }
 
 // -----------------------------------------------------------------------------
@@ -385,10 +472,10 @@ function initTacticalRadar() {
 
     if (elContacts) elContacts.textContent = `${contacts.length} ACTIVE`;
 
-    requestAnimationFrame(renderRadar);
+    setTimeout(renderRadar, 33);
   }
 
-  requestAnimationFrame(renderRadar);
+  renderRadar();
 }
 
 // -----------------------------------------------------------------------------
@@ -524,8 +611,10 @@ function initWorldMap() {
 
   function renderMap() {
     if (!ctx || !canvas) return;
-    const w = (canvas.width = canvas.parentElement?.clientWidth || 280);
-    const h = (canvas.height = 125);
+    const w = canvas.parentElement?.clientWidth || 280;
+    const h = 125;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
 
     ctx.clearRect(0, 0, w, h);
 
@@ -618,10 +707,10 @@ function initWorldMap() {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    requestAnimationFrame(renderMap);
+    setTimeout(renderMap, 33);
   }
 
-  requestAnimationFrame(renderMap);
+  renderMap();
 }
 
 // -----------------------------------------------------------------------------
@@ -639,8 +728,12 @@ function initChronometer() {
   const days = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
   const months = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
 
+  let lastSecond = -1;
   function updateClock() {
+    setTimeout(updateClock, 250);
     const now = new Date();
+    if (now.getSeconds() === lastSecond) return;
+    lastSecond = now.getSeconds();
 
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -663,7 +756,6 @@ function initChronometer() {
     const dayOfYear = Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
     if (elDayOfYear) elDayOfYear.textContent = String(dayOfYear);
 
-    requestAnimationFrame(updateClock);
   }
 
   // Dynamic Auto-fit safeguard ensuring the clock strictly stays on a single line
@@ -694,7 +786,7 @@ function initChronometer() {
   setTimeout(fitClockToSingleLine, 100);
   setTimeout(fitClockToSingleLine, 500);
 
-  requestAnimationFrame(updateClock);
+  updateClock();
 }
 
 // -----------------------------------------------------------------------------
@@ -843,7 +935,7 @@ function initSystemTelemetry() {
   }
 
   poll();
-  setInterval(poll, 1300);
+  setInterval(poll, 2000);
 }
 
 function drawSparkline(canvas: HTMLCanvasElement | null, data: number[], strokeColor: string) {
@@ -851,8 +943,11 @@ function drawSparkline(canvas: HTMLCanvasElement | null, data: number[], strokeC
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const width = (canvas.width = canvas.parentElement?.clientWidth || 280);
-  const height = (canvas.height = 30);
+  // Assigning canvas.width reallocates the backing store, so only do it on change.
+  const width = canvas.parentElement?.clientWidth || 280;
+  const height = 30;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
   ctx.clearRect(0, 0, width, height);
 
   ctx.beginPath();
@@ -946,7 +1041,7 @@ function initMusic() {
   let lastLabel = '';
 
   function resize() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
     canvas!.width = Math.round(canvas!.clientWidth * dpr);
     canvas!.height = Math.round(canvas!.clientHeight * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -977,7 +1072,7 @@ function initMusic() {
 
   // Draw at display rate and ease each bar toward its target for smoother motion.
   function draw() {
-    requestAnimationFrame(draw);
+    setTimeout(draw, 33);
     const w = canvas!.clientWidth;
     const h = canvas!.clientHeight;
     g.clearRect(0, 0, w, h);
@@ -997,18 +1092,27 @@ function initMusic() {
       g.fillRect(i * (barW + gap), h - bh, barW, bh);
     }
   }
-  requestAnimationFrame(draw);
+  draw();
 }
 
 // -----------------------------------------------------------------------------
 // BOOTSTRAP ENGINE
 // -----------------------------------------------------------------------------
+// Diagnostics: open the page with ?skip=mountains,radar,map,clock,telemetry,device,music (or ?skip=all)
+// to turn modules off one at a time and find what drives memory use.
+const skipped = new Set(
+  (new URLSearchParams(window.location.search).get('skip') ?? '').split(',').filter(Boolean)
+);
+const runModule = (name: string, init: () => void) => {
+  if (!skipped.has(name) && !skipped.has('all')) init();
+};
+
 window.addEventListener('DOMContentLoaded', () => {
-  initAnimatedAsciiMountains();
-  initTacticalRadar();
-  initWorldMap();
-  initChronometer();
-  initSystemTelemetry();
-  initDeviceTelemetry();
-  initMusic();
+  runModule('mountains', initAnimatedAsciiMountains);
+  runModule('radar', initTacticalRadar);
+  runModule('map', initWorldMap);
+  runModule('clock', initChronometer);
+  runModule('telemetry', initSystemTelemetry);
+  runModule('device', initDeviceTelemetry);
+  runModule('music', initMusic);
 });

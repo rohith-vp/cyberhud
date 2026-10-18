@@ -6,6 +6,10 @@ import si from 'systeminformation';
 import { startMusic } from './music.mjs';
 
 const PORT = 7777;
+const COLLECT_MS = 2000;     // how often fast stats are collected
+const SLOW_MS = 30000;       // GPU, gateway, and fan data change rarely
+const LATENCY_MS = 15000;    // latency needs a network ping
+const MUSIC_PUSH_MS = 66;    // ~15 spectrum updates per second
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(HERE, 'dist');
 const MIME = {
@@ -21,9 +25,19 @@ const toMBps = (b) => Math.max(0, b || 0) / 1e6;
 let latencyCache = null;
 let latest = null;
 let busy = false;
+let slow = { graphics: null, gateway: null, fans: [], at: 0 };
+
+async function refreshSlow() {
+  const [graphics, gateway, fans] = await Promise.all([
+    safe(() => si.graphics(), null),
+    safe(() => si.networkGatewayDefault(), null),
+    safe(() => si.fans(), []),
+  ]);
+  slow = { graphics, gateway, fans, at: Date.now() };
+}
 
 async function collect() {
-  const [load, speed, temp, mem, disks, netStats, diskIO, battery, time, graphics, gateway, fans] = await Promise.all([
+  const [load, speed, temp, mem, disks, netStats, diskIO, battery, time] = await Promise.all([
     safe(() => si.currentLoad(), null),
     safe(() => si.cpuCurrentSpeed(), null),
     safe(() => si.cpuTemperature(), null),
@@ -33,9 +47,6 @@ async function collect() {
     safe(() => si.fsStats(), null),
     safe(() => si.battery(), null),
     safe(() => si.time(), null),
-    safe(() => si.graphics(), null),
-    safe(() => si.networkGatewayDefault(), null),
-    safe(() => si.fans(), []),
   ]);
 
   // Prefer the root filesystem ('/' on Linux, 'C:' on Windows).
@@ -52,9 +63,9 @@ async function collect() {
       cores: load ? load.cpus.map((c) => Math.round(c.load)) : [],
       freqGHz: speed?.avg ?? null,
       tempC: temp?.main > 0 ? temp.main : null,
-      fanRpm: fans?.[0]?.rpm ?? null,
+      fanRpm: slow.fans?.[0]?.rpm ?? null,
     },
-    gpu: { tempC: graphics?.controllers?.[0]?.temperatureGpu ?? null },
+    gpu: { tempC: slow.graphics?.controllers?.[0]?.temperatureGpu ?? null },
     ram: mem ? { usedGB: toGB(mem.active), totalGB: toGB(mem.total) } : null,
     disk: mainDisk
       ? {
@@ -68,7 +79,7 @@ async function collect() {
       rxMBps: toMBps(rx),
       txMBps: toMBps(tx),
       latencyMs: latencyCache,
-      gateway: gateway || null,
+      gateway: slow.gateway || null,
       online: latencyCache !== null,
     },
     battery: battery?.hasBattery
@@ -81,7 +92,14 @@ async function collect() {
 async function refresh() {
   if (busy) return;
   busy = true;
-  try { latest = await collect(); } catch (e) { console.error(e); } finally { busy = false; }
+  try {
+    if (Date.now() - slow.at > SLOW_MS) await refreshSlow();
+    latest = await collect();
+  } catch (e) {
+    console.error(e);
+  } finally {
+    busy = false;
+  }
 }
 
 // Latency involves a network ping, so check it less often.
@@ -93,18 +111,18 @@ const music = startMusic();
 
 refresh();
 refreshLatency();
-setInterval(refresh, 1000);
-setInterval(refreshLatency, 15000);
+setInterval(refresh, COLLECT_MS);
+setInterval(refreshLatency, LATENCY_MS);
 
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
-  // Server-Sent Events: pushes music state and spectrum about 20 times a second.
+  // Server-Sent Events: pushes music state and spectrum.
   if (url.pathname === '/music') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     const send = () => res.write(`data: ${JSON.stringify(music.state())}\n\n`);
     send();
-    const timer = setInterval(send, 50);
+    const timer = setInterval(send, MUSIC_PUSH_MS);
     req.on('close', () => clearInterval(timer));
     return;
   }

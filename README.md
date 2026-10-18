@@ -31,7 +31,7 @@ CyberHUD is a static web page served from a small local Node.js helper. The help
 - **Audio spectrum:** a 24-band frequency visualizer with the current track's title and artist. It shows bars only while something is playing.
 - **Tactical radar:** an animated sweep. Contacts are decorative.
 - **Global geo-location:** an equirectangular world map with a pulsing marker at your approximate location (derived from your timezone).
-- **Animated backdrop:** an ASCII mountain range drawn on a canvas, with twinkling stars.
+- **Animated backdrop:** an ASCII-style mountain range drawn by a WebGL shader, with twinkling stars.
 
 ## How it works
 
@@ -49,7 +49,7 @@ CyberHUD is a static web page served from a small local Node.js helper. The help
  │        ▼                                                        │
  │  Browser / wallpaper host                                       │
  │   • src/main.ts polls /stats every 1.3 s                        │
- │   • draws the HUD and canvases                                  │
+ │   • draws the HUD and canvases (mountains use WebGL)                                  │
  │                                                                 │
  └─────────────────────────────────────────────────────────────────┘
 ```
@@ -192,9 +192,20 @@ Build and development:
 
 - **[Vite](https://vitejs.dev/):** development server and production bundler.
 - **[TypeScript](https://www.typescriptlang.org/):** the page code is written in TypeScript. Run `npm run typecheck` to check it.
-- **HTML5 Canvas 2D API:** the mountain backdrop, radar, world map, and sparklines.
+- **HTML5 Canvas 2D API:** the radar, world map, sparklines, and spectrum bars.
+- **WebGL:** a fragment shader draws the mountain backdrop. It samples a glyph atlas that is built once at startup from the same font.
 
 The page uses no UI framework, and the styles are hand-written CSS.
+
+## Performance
+
+CyberHUD is designed to stay light:
+
+- **Helper:** collects stats every 2 seconds. GPU, gateway, and fan data refresh every 30 seconds. Latency is measured every 15 seconds. The systemd service caps memory at 150 MB and CPU at 15%.
+- **Music:** `parec` runs only while a player reports "Playing". Players are checked every 2 seconds.
+- **Page:** the mountains are drawn by a WebGL shader, so the per-pixel work runs on the GPU. The radar, map, mountains, and spectrum redraw at 30 fps. The clock updates only when the second changes. The spectrum's pixel density is capped at 1.5x.
+
+To adjust these, change the constants at the top of `stats-server.mjs` (`COLLECT_MS`, `SLOW_MS`, `LATENCY_MS`, `MUSIC_PUSH_MS`), `META_INTERVAL_MS` in `music.mjs`, and the `setTimeout(..., 33)` calls in `src/main.ts`. Lower values are smoother but use more resources.
 
 ## Troubleshooting
 
@@ -207,6 +218,8 @@ The page uses no UI framework, and the styles are hand-written CSS.
 - **Track info shows `NOT INSTALLED`:** install `playerctl` with `sudo pacman -S playerctl`.
 - **Track info shows `ERROR`:** the message after it is the `playerctl` error. Run `playerctl metadata` in a terminal to see the same error.
 - **Track info works in a terminal but not in the service:** the systemd user service may not have the session D-Bus address. Run `systemctl --user show-environment | grep DBUS` and check that `DBUS_SESSION_BUS_ADDRESS` is set. If it's missing, run `systemctl --user import-environment DBUS_SESSION_BUS_ADDRESS` and restart the service.
+- **Mountains don't show:** the page needs WebGL. Open the page in a browser and check the console for `Mountains:` messages.
+- **Memory keeps growing in the wallpaper:** the cause was two CSS animations that loop forever (the clock colon and the status beacon). They've been replaced with static styles. If memory still climbs, use `http://127.0.0.1:7777/?skip=all` to check whether the page's JavaScript modules are involved, and report it in an issue.
 - **Latency shows `N/A`:** the machine can't reach the ping target. Change the target in `stats-server.mjs` if your network blocks it.
 
 ## Limitations
