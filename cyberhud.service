@@ -5,7 +5,7 @@ After=graphical-session.target
 [Service]
 # Resource limits: the helper is light, these cap it if something misbehaves.
 Nice=10
-MemoryMax=150M
+MemoryMax=300M
 CPUQuota=15%
 ExecStart=/usr/bin/node %h/cyberhud/stats-server.mjs
 WorkingDirectory=%h/cyberhud
