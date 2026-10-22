@@ -49,7 +49,7 @@ CyberHUD is a static web page served from a small local Node.js helper. The help
  │        ▼                                                        │
  │  Browser / wallpaper host                                       │
  │   • src/main.ts polls /stats every 1.3 s                        │
- │   • draws the HUD and canvases (mountains use WebGL)                                  │
+ │   • draws the HUD and canvases (mountains use WebGL)            │
  │                                                                 │
  └─────────────────────────────────────────────────────────────────┘
 ```
@@ -193,19 +193,23 @@ Build and development:
 - **[Vite](https://vitejs.dev/):** development server and production bundler.
 - **[TypeScript](https://www.typescriptlang.org/):** the page code is written in TypeScript. Run `npm run typecheck` to check it.
 - **HTML5 Canvas 2D API:** the radar, world map, sparklines, and spectrum bars.
-- **WebGL:** a fragment shader draws the mountain backdrop. It samples a glyph atlas that is built once at startup from the same font.
+- **WebGL:** two fragment-shader passes draw the mountain backdrop. The first computes the terrain per character cell, and the second samples a glyph atlas (built once at startup from the same font) and applies the vignette and scanlines.
 
 The page uses no UI framework, and the styles are hand-written CSS.
 
 ## Performance
 
-CyberHUD is designed to stay light:
+CyberHUD is designed to stay light, on the GPU as well as the CPU:
 
 - **Helper:** collects stats every 2 seconds. GPU, gateway, and fan data refresh every 30 seconds. Latency is measured every 15 seconds. The systemd service caps memory at 150 MB and CPU at 15%.
-- **Music:** `parec` runs only while a player reports "Playing". Players are checked every 2 seconds.
-- **Page:** the mountains are drawn by a WebGL shader, so the per-pixel work runs on the GPU. The radar, map, mountains, and spectrum redraw at 30 fps. The clock updates only when the second changes. The spectrum's pixel density is capped at 1.5x.
+- **Music:** `parec` runs only while a player reports "Playing". Players are checked every 2 seconds. The helper sends spectrum updates to the page only when the state changes, so an idle page receives nothing.
+- **Mountains:** drawn by a two-pass WebGL shader. A small first pass computes the terrain and stars once per character cell (about 60,000 cells instead of about 2 million pixels). The full-screen second pass only looks up the result, so it does no trigonometry. The vignette, scanlines and canvas opacity are drawn in that pass, so the page has no extra full-screen overlay layers. The WebGL context asks for the low-power GPU.
+- **Few frames:** every frame the page produces costs GPU time whatever it draws, so the page produces as few as it can. The mountains, radar and map update at 15 fps from a single shared timer, so the browser composites once per tick. The loop speeds up to 30 fps only while the audio spectrum is showing bars, and pauses while the page is hidden.
+- **Cached canvas layers:** the map grid and continents, and the radar rings, sweep wedge and glows, are drawn once and copied each frame. The spectrum stops redrawing when nothing is playing.
+- **Cheap CSS:** the cards have no `backdrop-filter` blur, which would otherwise be re-run on every frame behind the animated background. Progress and core bars are drawn with `transform` and change instantly, since a CSS transition forces a burst of 60 Hz frames after every update. Text is only written to the page when it changes.
+- **Clock:** updates only when the second changes.
 
-To adjust these, change the constants at the top of `stats-server.mjs` (`COLLECT_MS`, `SLOW_MS`, `LATENCY_MS`, `MUSIC_PUSH_MS`), `META_INTERVAL_MS` in `music.mjs`, and the `setTimeout(..., 33)` calls in `src/main.ts`. Lower values are smoother but use more resources.
+To adjust these, add `?fps=30` to the wallpaper URL for smoother radar and mountains, or `?fps=10` to use even less GPU (the default is 15, range 5 to 60), or change the constants at the top of `stats-server.mjs` (`COLLECT_MS`, `SLOW_MS`, `LATENCY_MS`, `MUSIC_PUSH_MS`) and `META_INTERVAL_MS` in `music.mjs`. Lower values are smoother but use more resources.
 
 ## Troubleshooting
 

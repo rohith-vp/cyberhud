@@ -38,7 +38,7 @@
   --hud-glow: rgba(166, 227, 161, 0.40);
   --hud-glow-soft: rgba(166, 227, 161, 0.12);
   --hud-bg-canvas: var(--ctp-crust);
-  --hud-card-bg: rgba(24, 24, 37, 0.84);
+  --hud-card-bg: rgba(24, 24, 37, 0.90);
   --hud-card-border: rgba(69, 71, 90, 0.58);
   --hud-card-border-dim: rgba(49, 50, 68, 0.50);
   --hud-text-bright: var(--ctp-text);
@@ -106,6 +106,19 @@ html, body {
   z-index: 1;
   pointer-events: none;
   opacity: 0.90;
+  /* The WebGL canvas is opaque, so keep it hidden until its first frame is drawn. */
+  visibility: hidden;
+}
+
+/* Once the WebGL shader is running it draws the opacity, vignette and scanlines itself,
+   so the canvas is opaque and the overlay layers are removed. */
+.webgl-fx #ascii-mountain-canvas {
+  visibility: visible;
+  opacity: 1;
+}
+.webgl-fx .hud-vignette,
+.webgl-fx .hud-scanlines {
+  display: none;
 }
 
 .hud-vignette {
@@ -180,7 +193,6 @@ html, body {
   background: var(--hud-card-bg);
   border: 1px solid var(--hud-card-border);
   padding: 8px 12px;
-  backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -370,8 +382,8 @@ html, body {
 .core-mini-fill {
   width: 100%;
   background: var(--ctp-green);
-  height: 30%;
-  transition: height 0.4s ease;
+  height: 100%;
+  transform-origin: bottom;
   box-shadow: 0 0 4px var(--hud-glow-soft);
 }
 
@@ -432,7 +444,6 @@ html, body {
 #radar-canvas {
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   display: block;
 }
 
@@ -521,8 +532,9 @@ html, body {
 
 .clean-progress-bar {
   height: 100%;
+  width: 100%;
   background: var(--ctp-green);
-  transition: width 0.4s ease;
+  transform-origin: left;
   border-radius: 1px;
 }
 
@@ -560,7 +572,6 @@ html, body {
   background: rgba(17, 17, 27, 0.60);
   border: 1px solid var(--hud-card-border-dim);
   border-radius: 3px;
-  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -579,13 +590,12 @@ html, body {
   display: flex;
   align-items: center;
   gap: 5px;
-  background: rgba(24, 24, 37, 0.85);
+  background: rgba(24, 24, 37, 0.92);
   border: 1px solid var(--hud-card-border-dim);
   padding: 2px 6px;
   border-radius: 2px;
   font-size: 0.60rem;
   color: var(--ctp-text);
-  backdrop-filter: blur(4px);
 }
 
 .beacon-dot {
