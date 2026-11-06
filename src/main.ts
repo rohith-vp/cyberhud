@@ -1,6 +1,6 @@
 /**
  * CyberHUD - Catppuccin Mocha Live Desktop Wallpaper Engine
- * Non-interactive, pure automated 60fps rendering:
+ * Non-interactive, automated rendering (30fps by default, one shared frame loop):
  * - Animated drifting ASCII mountain range with twinkling stars
  * - Hero Digital Clock exclusively centered
  * - Tactical Radar positioned on the left
@@ -38,12 +38,79 @@ const CTP = {
 };
 
 // -----------------------------------------------------------------------------
+// FRAME LOOP
+// One timer drives every animated canvas. They update in the same task, so the browser
+// produces one composite per tick instead of one per canvas. Every frame the page
+// produces costs GPU time whatever it draws, so the loop only ticks as fast as the
+// fastest animation that currently needs it.
+// Open the page with ?fps=30 to raise the base rate (default 15, range 5-60).
+// -----------------------------------------------------------------------------
+const query = new URLSearchParams(window.location.search);
+const BASE_FPS = Math.min(60, Math.max(5, Number(query.get('fps')) || 15));
+// The audio spectrum looks choppy below this, so it asks for it while bars are showing.
+const SPECTRUM_FPS = Math.max(30, BASE_FPS);
+
+type FrameTask = (nowMs: number, dtSec: number) => void;
+interface Scheduled {
+  run: FrameTask;
+  rate: () => number; // frames per second this task wants right now
+  last: number;
+}
+const frameTasks: Scheduled[] = [];
+let loopStarted = false;
+
+function onFrame(run: FrameTask, rate: () => number = () => BASE_FPS) {
+  frameTasks.push({ run, rate, last: performance.now() });
+  if (loopStarted) return;
+  loopStarted = true;
+
+  const loop = () => {
+    const start = performance.now();
+    if (document.hidden) {
+      // Nothing is visible, so skip drawing and check again in a second.
+      for (const t of frameTasks) t.last = start;
+      setTimeout(loop, 1000);
+      return;
+    }
+    let fastest = BASE_FPS;
+    for (const t of frameTasks) fastest = Math.max(fastest, t.rate());
+    const tick = 1000 / fastest;
+    setTimeout(loop, Math.max(1, tick - (performance.now() - start)));
+
+    for (const t of frameTasks) {
+      const period = 1000 / t.rate();
+      // Run on the tick closest to this task's own period.
+      if (start - t.last < period - tick / 2) continue;
+      const dt = Math.min(0.25, (start - t.last) / 1000);
+      t.last = start;
+      try {
+        t.run(start, dt);
+      } catch (err) {
+        console.error('Frame task failed:', err);
+      }
+    }
+  };
+  loop();
+}
+
+// -----------------------------------------------------------------------------
 // 1. ANIMATED ASCII MOUNTAINS & TWINKLING STARS
+// Two GPU passes:
+//   1. A small "grid" pass runs the terrain and star maths once per character cell
+//      and stores the glyph and colour of each layer in a texture.
+//   2. The full-screen pass only looks up its cell, samples the glyph atlas, and
+//      applies the vignette and scanlines. It does no trigonometry.
 // -----------------------------------------------------------------------------
 function initAnimatedAsciiMountains() {
   const canvas = document.getElementById('ascii-mountain-canvas') as HTMLCanvasElement | null;
   if (!canvas) return;
-  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false });
+  const gl = canvas.getContext('webgl', {
+    alpha: false,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    powerPreference: 'low-power'
+  });
   if (!gl) {
     console.warn('Mountains: WebGL is not available.');
     return;
@@ -56,6 +123,9 @@ function initAnimatedAsciiMountains() {
   const FONT = `13px 'JetBrains Mono', 'Share Tech Mono', monospace`;
   // Index of each glyph in the atlas. The shader refers to glyphs by these indices.
   const GLYPHS = ['^', '/', '\\', '_', ':', '.', '#', '%', '|', '~', '=', '-', '·', '*', '+', '✦', '°'];
+  // The grid texture holds these blocks side by side, each one cols wide:
+  // stars, far, mid, near, and the star alpha values.
+  const BLOCKS = 5;
 
   // Converts a Catppuccin hex colour to a GLSL vec3 literal.
   const rgb = (hex: string) => {
@@ -68,20 +138,16 @@ function initAnimatedAsciiMountains() {
     void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
   `;
 
-  const FRAG = `
+  // Pass 1: one fragment per (block, column, row). Writes rgb = colour and
+  // a = (glyph index + 1) / 255, where 0 means "no glyph". The last block stores the star alpha in r.
+  const FRAG_GRID = `
     precision highp float;
 
-    uniform vec2 u_res;
     uniform float u_cols;
     uniform float u_rows;
     uniform float u_time;
-    uniform float u_atlasW;
-    uniform sampler2D u_atlas;
 
     const float PI = 3.14159265;
-    const float CW = ${CHAR_W}.0;
-    const float CH = ${CHAR_H}.0;
-    const float CELL = ${CELL}.0;
 
     const vec3 C_LAV = ${rgb(CTP.lavender)};
     const vec3 C_ROSE = ${rgb(CTP.rosewater)};
@@ -235,6 +301,57 @@ function initAnimatedAsciiMountains() {
       return 12.0;
     }
 
+    void main() {
+      float x = floor(gl_FragCoord.x);
+      float r = floor(gl_FragCoord.y);
+      // The +0.5 keeps the division away from exact integers.
+      float block = floor((x + 0.5) / u_cols);
+      float c = x - block * u_cols;
+
+      vec3 col = vec3(0.0);
+      float alpha = 0.0;
+      float g = -1.0;
+      if (block < 0.5) {
+        g = starGlyph(c, r, col, alpha);
+      } else if (block < 1.5) {
+        g = farGlyph(c, r, col);
+      } else if (block < 2.5) {
+        g = midGlyph(c, r, col);
+      } else if (block < 3.5) {
+        g = nearGlyph(c, r, col);
+      } else {
+        starGlyph(c, r, col, alpha);
+        gl_FragColor = vec4(alpha, 0.0, 0.0, 1.0);
+        return;
+      }
+      gl_FragColor = vec4(col, (g + 1.0) / 255.0);
+    }
+  `;
+
+  // Pass 2: draws the glyphs for each pixel from the grid texture, then applies the
+  // canvas opacity, vignette and scanlines that the page's overlay layers
+  // otherwise provide.
+  const FRAG_DRAW = `
+    precision highp float;
+
+    uniform vec2 u_res;
+    uniform float u_cols;
+    uniform float u_rows;
+    uniform float u_atlasW;
+    uniform sampler2D u_atlas;
+    uniform sampler2D u_grid;
+
+    const float CW = ${CHAR_W}.0;
+    const float CH = ${CHAR_H}.0;
+    const float CELL = ${CELL}.0;
+    const float BLOCKS = ${BLOCKS}.0;
+    const vec3 C_CRUST = ${rgb(CTP.crust)};
+    const float CANVAS_OPACITY = 0.9;
+
+    vec4 cell(float block, float c, float r) {
+      return texture2D(u_grid, vec2((block * u_cols + c + 0.5) / (u_cols * BLOCKS), (r + 0.5) / u_rows));
+    }
+
     vec4 glyphSrc(float g, vec3 col, float alpha, vec2 local) {
       vec2 uv = vec2((g * CELL + local.x + 0.5) / u_atlasW, (local.y + 0.5) / CELL);
       float cov = texture2D(u_atlas, uv).a * alpha;
@@ -246,6 +363,13 @@ function initAnimatedAsciiMountains() {
       return src + dst * (1.0 - src.a);
     }
 
+    vec4 layer(float block, float c, float r, vec2 local, float alpha, vec4 acc) {
+      vec4 t = cell(block, c, r);
+      if (t.a < 0.002) return acc;
+      float g = floor(t.a * 255.0 + 0.5) - 1.0;
+      return over(glyphSrc(g, t.rgb, alpha, local), acc);
+    }
+
     void main() {
       vec2 p = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y);
       float c = floor(p.x / CW);
@@ -253,22 +377,28 @@ function initAnimatedAsciiMountains() {
       vec2 local = vec2(mod(p.x, CW), mod(p.y, CH));
 
       vec4 acc = vec4(0.0);
-      vec3 col;
-      float alpha;
 
-      float g = starGlyph(c, r, col, alpha);
-      if (g >= 0.0) acc = over(glyphSrc(g, col, alpha, local), acc);
+      vec4 star = cell(0.0, c, r);
+      if (star.a >= 0.002) {
+        float g = floor(star.a * 255.0 + 0.5) - 1.0;
+        acc = over(glyphSrc(g, star.rgb, cell(4.0, c, r).r, local), acc);
+      }
+      acc = layer(1.0, c, r, local, 0.65, acc);
+      acc = layer(2.0, c, r, local, 0.85, acc);
+      acc = layer(3.0, c, r, local, 0.95, acc);
 
-      g = farGlyph(c, r, col);
-      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.65, local), acc);
+      // Canvas opacity over the page background.
+      vec3 colour = acc.rgb * CANVAS_OPACITY + C_CRUST * (1.0 - CANVAS_OPACITY * acc.a);
 
-      g = midGlyph(c, r, col);
-      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.85, local), acc);
+      // Vignette: transparent up to 55% of the way to the corner, then up to 75% dark.
+      float vt = clamp((length(gl_FragCoord.xy - 0.5 * u_res) / (0.5 * length(u_res)) - 0.55) / 0.45, 0.0, 1.0);
+      colour = mix(colour, C_CRUST, 0.75 * vt);
 
-      g = nearGlyph(c, r, col);
-      if (g >= 0.0) acc = over(glyphSrc(g, col, 0.95, local), acc);
+      // Scanlines: every 3px band has one clear row, then two rows darkened by 20% x 0.6.
+      float line = mod(floor(p.y), 3.0) < 0.5 ? 0.0 : 1.0;
+      colour = mix(colour, C_CRUST, 0.12 * line);
 
-      gl_FragColor = acc;
+      gl_FragColor = vec4(colour, 1.0);
     }
   `;
 
@@ -283,9 +413,25 @@ function initAnimatedAsciiMountains() {
     return shader;
   }
 
+  function link(vert: string, frag: string): WebGLProgram {
+    const program = g.createProgram();
+    if (!program) throw new Error('createProgram failed');
+    g.attachShader(program, compile(g.VERTEX_SHADER, vert));
+    g.attachShader(program, compile(g.FRAGMENT_SHADER, frag));
+    g.bindAttribLocation(program, 0, 'a_pos');
+    g.linkProgram(program);
+    if (!g.getProgramParameter(program, g.LINK_STATUS)) {
+      throw new Error(g.getProgramInfoLog(program) || 'program link failed');
+    }
+    return program;
+  }
+
   async function start() {
-    // Wait for the font so the glyph atlas uses it.
-    await document.fonts.load(FONT).catch(() => undefined);
+    // Wait for the font so the glyph atlas uses it, but not forever if the font host is unreachable.
+    await Promise.race([
+      document.fonts.load(FONT).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 3000))
+    ]);
 
     // Draw each glyph once into a strip of atlas cells.
     const atlas = document.createElement('canvas');
@@ -298,65 +444,103 @@ function initAnimatedAsciiMountains() {
     actx.fillStyle = '#ffffff';
     GLYPHS.forEach((ch, i) => actx.fillText(ch, i * CELL, 0));
 
-    const program = g.createProgram();
-    if (!program) throw new Error('createProgram failed');
-    g.attachShader(program, compile(g.VERTEX_SHADER, VERT));
-    g.attachShader(program, compile(g.FRAGMENT_SHADER, FRAG));
-    g.linkProgram(program);
-    if (!g.getProgramParameter(program, g.LINK_STATUS)) {
-      throw new Error(g.getProgramInfoLog(program) || 'program link failed');
-    }
-    g.useProgram(program);
+    const gridProgram = link(VERT, FRAG_GRID);
+    const drawProgram = link(VERT, FRAG_DRAW);
 
-    // One full-screen quad.
+    // One full-screen quad, shared by both passes.
     const buffer = g.createBuffer();
     g.bindBuffer(g.ARRAY_BUFFER, buffer);
     g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), g.STATIC_DRAW);
-    const aPos = g.getAttribLocation(program, 'a_pos');
-    g.enableVertexAttribArray(aPos);
-    g.vertexAttribPointer(aPos, 2, g.FLOAT, false, 0, 0);
+    g.enableVertexAttribArray(0);
+    g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
 
-    const texture = g.createTexture();
-    g.bindTexture(g.TEXTURE_2D, texture);
-    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR);
-    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
-    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
-    g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+    // Unit 0: glyph atlas. Unit 1: grid texture (pass 1 output, pass 2 input).
+    const setupTexture = (filter: number) => {
+      const tex = g.createTexture();
+      g.bindTexture(g.TEXTURE_2D, tex);
+      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, filter);
+      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, filter);
+      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
+      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+      return tex;
+    };
+    g.activeTexture(g.TEXTURE0);
+    setupTexture(g.LINEAR);
     g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, atlas);
+    g.activeTexture(g.TEXTURE1);
+    const gridTexture = setupTexture(g.NEAREST);
 
-    const uRes = g.getUniformLocation(program, 'u_res');
-    const uCols = g.getUniformLocation(program, 'u_cols');
-    const uRows = g.getUniformLocation(program, 'u_rows');
-    const uTime = g.getUniformLocation(program, 'u_time');
-    const uAtlasW = g.getUniformLocation(program, 'u_atlasW');
-    const uAtlas = g.getUniformLocation(program, 'u_atlas');
-    g.uniform1i(uAtlas, 0);
-    g.uniform1f(uAtlasW, atlas.width);
+    const framebuffer = g.createFramebuffer();
+
+    const gridLoc = {
+      cols: g.getUniformLocation(gridProgram, 'u_cols'),
+      rows: g.getUniformLocation(gridProgram, 'u_rows'),
+      time: g.getUniformLocation(gridProgram, 'u_time')
+    };
+    const drawLoc = {
+      res: g.getUniformLocation(drawProgram, 'u_res'),
+      cols: g.getUniformLocation(drawProgram, 'u_cols'),
+      rows: g.getUniformLocation(drawProgram, 'u_rows'),
+      atlasW: g.getUniformLocation(drawProgram, 'u_atlasW'),
+      atlas: g.getUniformLocation(drawProgram, 'u_atlas'),
+      grid: g.getUniformLocation(drawProgram, 'u_grid')
+    };
+    g.useProgram(drawProgram);
+    g.uniform1i(drawLoc.atlas, 0);
+    g.uniform1i(drawLoc.grid, 1);
+    g.uniform1f(drawLoc.atlasW, atlas.width);
 
     let cols = 0;
     let rows = 0;
     function resize() {
       canvas!.width = window.innerWidth;
       canvas!.height = window.innerHeight;
-      g.viewport(0, 0, canvas!.width, canvas!.height);
       cols = Math.ceil(canvas!.width / CHAR_W) + 2;
       rows = Math.ceil(canvas!.height / CHAR_H) + 2;
+
+      g.activeTexture(g.TEXTURE1);
+      g.bindTexture(g.TEXTURE_2D, gridTexture);
+      g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, cols * BLOCKS, rows, 0, g.RGBA, g.UNSIGNED_BYTE, null);
+      g.bindFramebuffer(g.FRAMEBUFFER, framebuffer);
+      g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, gridTexture, 0);
+
+      g.useProgram(gridProgram);
+      g.uniform1f(gridLoc.cols, cols);
+      g.uniform1f(gridLoc.rows, rows);
+      g.useProgram(drawProgram);
+      g.uniform2f(drawLoc.res, canvas!.width, canvas!.height);
+      g.uniform1f(drawLoc.cols, cols);
+      g.uniform1f(drawLoc.rows, rows);
     }
     window.addEventListener('resize', resize);
     resize();
 
+    // After a GPU reset the context's resources are gone. Reloading is the simplest recovery.
+    canvas!.addEventListener('webglcontextlost', (e) => e.preventDefault());
+    canvas!.addEventListener('webglcontextrestored', () => window.location.reload());
+
     const t0 = performance.now();
-    // Redraws 30 times a second. The GPU does the per-pixel work.
-    function draw() {
-      setTimeout(draw, 33);
-      g.uniform2f(uRes, canvas!.width, canvas!.height);
-      g.uniform1f(uCols, cols);
-      g.uniform1f(uRows, rows);
-      g.uniform1f(uTime, (performance.now() - t0) / 1000);
-      g.clear(g.COLOR_BUFFER_BIT);
+    let fxEnabled = false;
+    onFrame((now) => {
+      // Pass 1: terrain and stars, one fragment per character cell.
+      g.bindFramebuffer(g.FRAMEBUFFER, framebuffer);
+      g.viewport(0, 0, cols * BLOCKS, rows);
+      g.useProgram(gridProgram);
+      g.uniform1f(gridLoc.time, (now - t0) / 1000);
       g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
-    }
-    draw();
+
+      // Pass 2: glyphs, vignette and scanlines, one fragment per pixel.
+      g.bindFramebuffer(g.FRAMEBUFFER, null);
+      g.viewport(0, 0, canvas!.width, canvas!.height);
+      g.useProgram(drawProgram);
+      g.drawArrays(g.TRIANGLE_STRIP, 0, 4);
+
+      // The shader now draws the vignette, scanlines and opacity, so hide the CSS versions.
+      if (!fxEnabled) {
+        fxEnabled = true;
+        document.body.classList.add('webgl-fx');
+      }
+    });
   }
 
   start().catch((err) => console.error('Mountains failed to start:', err));
@@ -364,6 +548,8 @@ function initAnimatedAsciiMountains() {
 
 // -----------------------------------------------------------------------------
 // 2. TACTICAL RADAR (IN LEFT COLUMN)
+// The rings, the sweep wedge and the blip glow are drawn once into small offscreen
+// canvases. Each frame only copies them, rotating the sweep.
 // -----------------------------------------------------------------------------
 function initTacticalRadar() {
   const canvas = document.getElementById('radar-canvas') as HTMLCanvasElement | null;
@@ -385,97 +571,118 @@ function initTacticalRadar() {
     { r: 0.80, angle: 4.1, intensity: 0.2 },
     { r: 0.48, angle: 5.4, intensity: 0.2 }
   ];
+  if (elContacts) elContacts.textContent = `${contacts.length} ACTIVE`;
 
+  const makeLayer = (px: number) => {
+    const layer = document.createElement('canvas');
+    layer.width = px;
+    layer.height = px;
+    const lctx = layer.getContext('2d');
+    if (!lctx) throw new Error('2D context unavailable');
+    return { layer, lctx };
+  };
+
+  // Outer border, range rings and crosshairs never change.
+  const { layer: backdrop, lctx: bctx } = makeLayer(size);
+  bctx.strokeStyle = 'rgba(148, 226, 213, 0.45)';
+  bctx.lineWidth = 1.2;
+  bctx.beginPath();
+  bctx.arc(center, center, radius, 0, Math.PI * 2);
+  bctx.stroke();
+
+  [0.35, 0.70].forEach(factor => {
+    bctx.strokeStyle = 'rgba(116, 199, 236, 0.22)';
+    bctx.lineWidth = 1;
+    bctx.setLineDash([2, 3]);
+    bctx.beginPath();
+    bctx.arc(center, center, radius * factor, 0, Math.PI * 2);
+    bctx.stroke();
+    bctx.setLineDash([]);
+  });
+
+  bctx.strokeStyle = 'rgba(116, 199, 236, 0.22)';
+  bctx.lineWidth = 1;
+  bctx.beginPath();
+  bctx.moveTo(center - radius, center);
+  bctx.lineTo(center + radius, center);
+  bctx.moveTo(center, center - radius);
+  bctx.lineTo(center, center + radius);
+  bctx.stroke();
+
+  // The sweep wedge and its leading line, drawn pointing along +x.
+  const { layer: sweep, lctx: sctx } = makeLayer(size);
+  sctx.translate(center, center);
+  const fanSegments = 16;
+  for (let i = 0; i < fanSegments; i++) {
+    const a = -(i / fanSegments) * 0.45;
+    sctx.beginPath();
+    sctx.moveTo(0, 0);
+    sctx.arc(0, 0, radius, a - 0.03, a, false);
+    sctx.closePath();
+    sctx.fillStyle = `rgba(148, 226, 213, ${(1 - i / fanSegments) * 0.22})`;
+    sctx.fill();
+  }
+  sctx.strokeStyle = CTP.teal;
+  sctx.lineWidth = 1.2;
+  sctx.beginPath();
+  sctx.moveTo(0, 0);
+  sctx.lineTo(radius, 0);
+  sctx.stroke();
+
+  // Soft green glow behind each blip. It replaces a per-frame shadowBlur.
+  const glowSize = 24;
+  const { layer: glow, lctx: gctx } = makeLayer(glowSize);
+  const gradient = gctx.createRadialGradient(glowSize / 2, glowSize / 2, 0, glowSize / 2, glowSize / 2, glowSize / 2);
+  gradient.addColorStop(0, 'rgba(166, 227, 161, 0.6)');
+  gradient.addColorStop(0.3, 'rgba(166, 227, 161, 0.28)');
+  gradient.addColorStop(1, 'rgba(166, 227, 161, 0)');
+  gctx.fillStyle = gradient;
+  gctx.fillRect(0, 0, glowSize, glowSize);
+
+  const SWEEP_RAD_PER_SEC = 1.14;
+  const FADE_PER_SEC = 0.27;
   let sweepAngle = 0;
+  let lastDegrees = -1;
 
-  function renderRadar() {
-    if (!ctx) return;
+  onFrame((_now, dt) => {
     ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(backdrop, 0, 0);
 
-    // Outer border
-    ctx.strokeStyle = 'rgba(148, 226, 213, 0.45)';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(center, center, radius, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Range rings
-    [0.35, 0.70].forEach(factor => {
-      ctx.strokeStyle = 'rgba(116, 199, 236, 0.22)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath();
-      ctx.arc(center, center, radius * factor, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    });
-
-    // Crosshairs
-    ctx.strokeStyle = 'rgba(116, 199, 236, 0.22)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(center - radius, center);
-    ctx.lineTo(center + radius, center);
-    ctx.moveTo(center, center - radius);
-    ctx.lineTo(center, center + radius);
-    ctx.stroke();
-
-    // Rotate sweep
-    sweepAngle = (sweepAngle + 0.038) % (Math.PI * 2);
+    sweepAngle = (sweepAngle + SWEEP_RAD_PER_SEC * dt) % (Math.PI * 2);
     const degrees = Math.round((sweepAngle * 180) / Math.PI);
-    if (elBearing) elBearing.textContent = `${String(degrees).padStart(3, '0')}°`;
+    if (degrees !== lastDegrees) {
+      lastDegrees = degrees;
+      if (elBearing) elBearing.textContent = `${String(degrees).padStart(3, '0')}°`;
+    }
 
     ctx.save();
     ctx.translate(center, center);
     ctx.rotate(sweepAngle);
-
-    const fanSegments = 16;
-    for (let i = 0; i < fanSegments; i++) {
-      const a = -(i / fanSegments) * 0.45;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, radius, a - 0.03, a, false);
-      ctx.closePath();
-      const alpha = (1 - i / fanSegments) * 0.22;
-      ctx.fillStyle = `rgba(148, 226, 213, ${alpha})`;
-      ctx.fill();
-    }
-
-    ctx.strokeStyle = CTP.teal;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(radius, 0);
-    ctx.stroke();
+    ctx.drawImage(sweep, -center, -center);
     ctx.restore();
 
-    // Contacts
+    // At low frame rates the sweep moves further each frame, so widen the window to never skip a blip.
+    const hitWindow = Math.max(0.12, SWEEP_RAD_PER_SEC * dt * 1.5);
     contacts.forEach(blip => {
       const angleDiff = (sweepAngle - blip.angle + Math.PI * 2) % (Math.PI * 2);
-      if (angleDiff < 0.12) {
+      if (angleDiff < hitWindow) {
         blip.intensity = 1.0;
       } else {
-        blip.intensity = Math.max(0.18, blip.intensity - 0.009);
+        blip.intensity = Math.max(0.18, blip.intensity - FADE_PER_SEC * dt);
       }
 
       const bx = center + Math.cos(blip.angle) * (radius * blip.r);
       const by = center + Math.sin(blip.angle) * (radius * blip.r);
 
+      ctx.globalAlpha = blip.intensity;
+      ctx.drawImage(glow, bx - glowSize / 2, by - glowSize / 2);
+      ctx.globalAlpha = 1;
       ctx.fillStyle = `rgba(166, 227, 161, ${blip.intensity})`;
-      ctx.shadowColor = CTP.green;
-      ctx.shadowBlur = blip.intensity * 6;
       ctx.beginPath();
       ctx.arc(bx, by, 2.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.shadowBlur = 0;
     });
-
-    if (elContacts) elContacts.textContent = `${contacts.length} ACTIVE`;
-
-    setTimeout(renderRadar, 33);
-  }
-
-  renderRadar();
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -607,110 +814,135 @@ function initWorldMap() {
     [[-52, 60], [-20, 70], [-25, 82], [-55, 83], [-52, 60]]
   ];
 
-  let beaconPulse = 0;
+  const h = 125;
+  let w = 0;
+  let beaconX = 0;
+  let beaconY = 0;
 
-  function renderMap() {
-    if (!ctx || !canvas) return;
-    const w = canvas.parentElement?.clientWidth || 280;
-    const h = 125;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
+  // The grid, continents and crosshair never change, so they are drawn once per size
+  // into an offscreen canvas and copied each frame.
+  const backdrop = document.createElement('canvas');
+  const bctx = backdrop.getContext('2d');
+  if (!bctx) return;
 
-    ctx.clearRect(0, 0, w, h);
+  // The beacon's centre node, with its glow, drawn once instead of using shadowBlur every frame.
+  const nodeSize = 40;
+  const node = document.createElement('canvas');
+  node.width = nodeSize;
+  node.height = nodeSize;
+  const nctx = node.getContext('2d');
+  if (nctx) {
+    nctx.fillStyle = CTP.green;
+    nctx.shadowColor = CTP.peach;
+    nctx.shadowBlur = 8;
+    nctx.beginPath();
+    nctx.arc(nodeSize / 2, nodeSize / 2, 3, 0, Math.PI * 2);
+    nctx.fill();
+  }
 
-    // Coordinate conversion: Equirectangular projection
-    function projX(lon: number): number {
-      return ((lon + 180) / 360) * w;
-    }
-    function projY(lat: number): number {
-      return ((90 - lat) / 180) * h;
-    }
+  // Coordinate conversion: Equirectangular projection
+  const projX = (lon: number) => ((lon + 180) / 360) * w;
+  const projY = (lat: number) => ((90 - lat) / 180) * h;
 
-    // 1. Draw Lat/Lon grid lines
-    ctx.strokeStyle = 'rgba(69, 71, 90, 0.35)';
-    ctx.lineWidth = 0.8;
+  function rebuildBackdrop() {
+    backdrop.width = w;
+    backdrop.height = h;
+    bctx!.clearRect(0, 0, w, h);
+
+    // 1. Lat/Lon grid lines
+    bctx!.strokeStyle = 'rgba(69, 71, 90, 0.35)';
+    bctx!.lineWidth = 0.8;
 
     // Equator & Prime Meridian
-    ctx.beginPath();
-    ctx.moveTo(0, h / 2);
-    ctx.lineTo(w, h / 2);
-    ctx.moveTo(w / 2, 0);
-    ctx.lineTo(w / 2, h);
-    ctx.stroke();
+    bctx!.beginPath();
+    bctx!.moveTo(0, h / 2);
+    bctx!.lineTo(w, h / 2);
+    bctx!.moveTo(w / 2, 0);
+    bctx!.lineTo(w / 2, h);
+    bctx!.stroke();
 
     // Subtle meridian lines
     [-120, -60, 60, 120].forEach(lon => {
       const x = projX(lon);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
+      bctx!.beginPath();
+      bctx!.moveTo(x, 0);
+      bctx!.lineTo(x, h);
+      bctx!.stroke();
     });
 
     [-45, 45].forEach(lat => {
       const y = projY(lat);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
+      bctx!.beginPath();
+      bctx!.moveTo(0, y);
+      bctx!.lineTo(w, y);
+      bctx!.stroke();
     });
 
-    // 2. Draw Continent landmasses
-    ctx.fillStyle = 'rgba(69, 71, 90, 0.48)';
-    ctx.strokeStyle = CTP.surface1;
-    ctx.lineWidth = 1;
+    // 2. Continent landmasses
+    bctx!.fillStyle = 'rgba(69, 71, 90, 0.48)';
+    bctx!.strokeStyle = CTP.surface1;
+    bctx!.lineWidth = 1;
 
     continents.forEach(poly => {
-      ctx.beginPath();
+      bctx!.beginPath();
       poly.forEach(([lon, lat], i) => {
         const x = projX(lon);
         const y = projY(lat);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (i === 0) bctx!.moveTo(x, y);
+        else bctx!.lineTo(x, y);
       });
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+      bctx!.closePath();
+      bctx!.fill();
+      bctx!.stroke();
     });
 
-    // 3. Draw Pulsing Location Beacon at Target Location
-    const beaconX = projX(targetLocation.lon);
-    const beaconY = projY(targetLocation.lat);
+    // 3. Crosshair ticks at the target location
+    beaconX = projX(targetLocation.lon);
+    beaconY = projY(targetLocation.lat);
+    bctx!.strokeStyle = CTP.peach;
+    bctx!.lineWidth = 1;
+    bctx!.beginPath();
+    bctx!.moveTo(beaconX - 7, beaconY);
+    bctx!.lineTo(beaconX + 7, beaconY);
+    bctx!.moveTo(beaconX, beaconY - 7);
+    bctx!.lineTo(beaconX, beaconY + 7);
+    bctx!.stroke();
+  }
 
-    beaconPulse = (beaconPulse + 0.04) % (Math.PI * 2);
+  // Only the width can change. Watch it instead of reading layout every frame.
+  const wrap = canvas.parentElement;
+  function fit() {
+    const nextW = wrap?.clientWidth || 280;
+    if (nextW === w) return;
+    w = nextW;
+    canvas!.width = w;
+    canvas!.height = h;
+    rebuildBackdrop();
+  }
+  if (wrap) new ResizeObserver(fit).observe(wrap);
+  fit();
+
+  const PULSE_RAD_PER_SEC = 1.2;
+  let beaconPulse = 0;
+
+  onFrame((_now, dt) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(backdrop, 0, 0);
+
+    // Pulsing ripple ring around the target location
+    beaconPulse = (beaconPulse + PULSE_RAD_PER_SEC * dt) % (Math.PI * 2);
     const waveRadius = 4 + (Math.sin(beaconPulse) + 1) * 6;
     const waveAlpha = Math.max(0.1, 1 - (waveRadius / 16));
 
-    // Outer ripple ring
     ctx.strokeStyle = `rgba(250, 179, 135, ${waveAlpha})`;
     ctx.lineWidth = 1.2;
     ctx.beginPath();
     ctx.arc(beaconX, beaconY, waveRadius, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Crosshair ticks
-    ctx.strokeStyle = CTP.peach;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(beaconX - 7, beaconY);
-    ctx.lineTo(beaconX + 7, beaconY);
-    ctx.moveTo(beaconX, beaconY - 7);
-    ctx.lineTo(beaconX, beaconY + 7);
-    ctx.stroke();
-
     // Center illuminated node
-    ctx.fillStyle = CTP.green;
-    ctx.shadowColor = CTP.peach;
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.arc(beaconX, beaconY, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    setTimeout(renderMap, 33);
-  }
-
-  renderMap();
+    ctx.drawImage(node, beaconX - nodeSize / 2, beaconY - nodeSize / 2);
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -805,12 +1037,24 @@ interface SysStats {
 const NA = 'N/A';
 const fmt = (v: number | null | undefined, digits = 1, suffix = '') =>
   v == null ? NA : `${v.toFixed(digits)}${suffix}`;
-const setText = (id: string, text: string) => {
-  const el = document.getElementById(id);
-  if (el) el.textContent = text;
+const elements = new Map<string, HTMLElement | null>();
+const byId = (id: string) => {
+  let el = elements.get(id);
+  if (el === undefined) {
+    el = document.getElementById(id);
+    elements.set(id, el);
+  }
+  return el;
 };
-const setWidth = (el: HTMLElement | null, pct: number | null) => {
-  if (el) el.style.width = `${Math.min(100, Math.max(0, pct ?? 0))}%`;
+// Skips the write when the text is unchanged, so the browser has nothing to repaint.
+const setText = (id: string, text: string) => {
+  const el = byId(id);
+  if (el && el.textContent !== text) el.textContent = text;
+};
+// Bars are scaled with a transform, which the compositor animates without a layout pass.
+const clampPct = (pct: number | null) => Math.min(100, Math.max(0, pct ?? 0));
+const setFillX = (el: HTMLElement | null, pct: number | null) => {
+  if (el) el.style.transform = `scaleX(${clampPct(pct) / 100})`;
 };
 const fmtUptime = (sec: number) => {
   const h = Math.floor(sec / 3600);
@@ -826,12 +1070,13 @@ function initSystemTelemetry() {
     for (let i = 0; i < 8; i++) {
       coresContainer.insertAdjacentHTML('beforeend', `
         <div class="core-mini-item">
-          <div class="core-mini-bar"><div id="core-fill-${i}" class="core-mini-fill" style="height: 0%"></div></div>
+          <div class="core-mini-bar"><div id="core-fill-${i}" class="core-mini-fill" style="transform: scaleY(0)"></div></div>
           <span class="core-mini-lbl font-mono">C${i + 1}</span>
         </div>`);
     }
   }
 
+  const coreFills = Array.from({ length: 8 }, (_, i) => document.getElementById(`core-fill-${i}`));
   const cpuHistory: number[] = new Array(36).fill(0);
   const netRxHistory: number[] = new Array(36).fill(0);
   const cpuSpark = document.getElementById('cpu-history-canvas') as HTMLCanvasElement | null;
@@ -850,8 +1095,8 @@ function initSystemTelemetry() {
     setText('thermal-ssd', NA);
     setText('fan-rpm-display', s.cpu.fanRpm == null ? NA : s.cpu.fanRpm.toLocaleString());
     s.cpu.cores.slice(0, 8).forEach((load, i) => {
-      const el = document.getElementById(`core-fill-${i}`);
-      if (el) el.style.height = `${load}%`;
+      const el = coreFills[i];
+      if (el) el.style.transform = `scaleY(${clampPct(load) / 100})`;
     });
     if (s.cpu.percent != null) {
       cpuHistory.shift();
@@ -866,7 +1111,7 @@ function initSystemTelemetry() {
       const pct = (s.ram.usedGB / s.ram.totalGB) * 100;
       setText('ram-amount-display', `${s.ram.usedGB.toFixed(1)} / ${s.ram.totalGB.toFixed(1)} GB`);
       setText('ram-percent-display', `${pct.toFixed(1)}% RAM`);
-      setWidth(document.getElementById('ram-progress-fill'), pct);
+      setFillX(byId('ram-progress-fill'), pct);
     }
 
     // Disk
@@ -874,7 +1119,7 @@ function initSystemTelemetry() {
       const pct = (s.disk.usedGB / s.disk.totalGB) * 100;
       setText('storage-used', s.disk.usedGB.toFixed(0));
       setText('storage-total', s.disk.totalGB.toFixed(0));
-      setWidth(diskFill, pct);
+      setFillX(diskFill, pct);
       setText('io-read-speed', s.disk.readMBps.toFixed(0));
       setText('io-write-speed', s.disk.writeMBps.toFixed(0));
     }
@@ -886,10 +1131,8 @@ function initSystemTelemetry() {
     netRxHistory.shift();
     netRxHistory.push(Math.min(100, s.net.rxMBps));
     drawSparkline(netSpark, netRxHistory, CTP.sapphire);
-    if (netBadge) {
-      netBadge.textContent = s.net.online ? `ONLINE (${Math.round(s.net.latencyMs ?? 0)}ms)` : 'OFFLINE';
-      netBadge.style.color = s.net.online ? CTP.teal : CTP.red;
-    }
+    setText('net-status-badge', s.net.online ? `ONLINE (${Math.round(s.net.latencyMs ?? 0)}ms)` : 'OFFLINE');
+    if (netBadge) netBadge.style.color = s.net.online ? CTP.teal : CTP.red;
     setText('radar-gateway', s.net.gateway ?? NA);
     setText('radar-latency', fmt(s.net.latencyMs, 0, 'ms'));
 
@@ -905,13 +1148,13 @@ function initSystemTelemetry() {
       setText('battery-state', 'ON BATTERY');
       setText('battery-status-tag', 'DISCHARGING');
       setText('battery-icon', '🔋');
-      setWidth(document.getElementById('battery-progress-fill'), b.percent);
+      setFillX(byId('battery-progress-fill'), b.percent);
     } else {
       setText('battery-level', `${b.percent}%`);
       setText('battery-state', b.charging ? 'CHARGING' : 'PLUGGED IN');
       setText('battery-status-tag', 'AC POWER');
       setText('battery-icon', '⚡');
-      setWidth(document.getElementById('battery-progress-fill'), b.percent);
+      setFillX(byId('battery-progress-fill'), b.percent);
     }
 
     // System uptime
@@ -1039,14 +1282,22 @@ function initMusic() {
   let target: number[] = [];
   let shown: number[] = [];
   let lastLabel = '';
+  let cssW = 0;
+  let cssH = 0;
+  // True while bars are on the canvas. When nothing is playing the canvas is left alone.
+  let hasBars = false;
 
   function resize() {
     const dpr = Math.min(1.5, window.devicePixelRatio || 1);
-    canvas!.width = Math.round(canvas!.clientWidth * dpr);
-    canvas!.height = Math.round(canvas!.clientHeight * dpr);
+    cssW = canvas!.clientWidth;
+    cssH = canvas!.clientHeight;
+    canvas!.width = Math.round(cssW * dpr);
+    canvas!.height = Math.round(cssH * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    hasBars = true;
   }
-  window.addEventListener('resize', resize);
+  // Also fires once on observe, so this sets the initial size.
+  new ResizeObserver(resize).observe(canvas);
   resize();
 
   // Track text changes rarely, so only touch the DOM when it changes.
@@ -1062,7 +1313,7 @@ function initMusic() {
     setText('music-artist', s.artist || '—');
   }
 
-  // The helper pushes state about 20 times a second.
+  // The helper pushes state when it changes (up to about 15 times a second while playing).
   const source = new EventSource('/music');
   source.onmessage = (e: MessageEvent<string>) => {
     const s = JSON.parse(e.data) as MusicState;
@@ -1070,39 +1321,45 @@ function initMusic() {
     updateText(s);
   };
 
-  // Draw at display rate and ease each bar toward its target for smoother motion.
-  function draw() {
-    setTimeout(draw, 33);
-    const w = canvas!.clientWidth;
-    const h = canvas!.clientHeight;
-    g.clearRect(0, 0, w, h);
-
+  // Ease each bar toward its target for smoother motion. The easing is per 1/30 s, so it
+  // looks the same at any frame rate.
+  onFrame((_now, dt) => {
     const n = target.length;
-    if (n === 0) return;
     if (shown.length !== n) shown = new Array(n).fill(0);
+
+    const ease = 1 - Math.pow(1 - 0.35, dt * 30);
+    const h = cssH;
+    let visible = false;
+    for (let i = 0; i < n; i++) {
+      shown[i] += (target[i] - shown[i]) * ease;
+      if (Math.max(0, Math.min(1, shown[i])) * h >= 1) visible = true;
+    }
+    // Nothing to draw and the canvas is already clear.
+    if (!visible && !hasBars) return;
+    hasBars = visible;
+
+    const w = cssW;
+    g.clearRect(0, 0, w, h);
+    if (!visible) return;
 
     const gap = 3;
     const barW = (w - gap * (n - 1)) / n;
     for (let i = 0; i < n; i++) {
-      shown[i] += (target[i] - shown[i]) * 0.35;
       const v = Math.max(0, Math.min(1, shown[i]));
       const bh = v * h;
       if (bh < 1) continue;
       g.fillStyle = v > 0.75 ? CTP.peach : v > 0.4 ? CTP.green : CTP.teal;
       g.fillRect(i * (barW + gap), h - bh, barW, bh);
     }
-  }
-  draw();
+  }, () => (hasBars || target.some((v) => v > 0) ? SPECTRUM_FPS : BASE_FPS));
 }
 
 // -----------------------------------------------------------------------------
 // BOOTSTRAP ENGINE
 // -----------------------------------------------------------------------------
 // Diagnostics: open the page with ?skip=mountains,radar,map,clock,telemetry,device,music (or ?skip=all)
-// to turn modules off one at a time and find what drives memory use.
-const skipped = new Set(
-  (new URLSearchParams(window.location.search).get('skip') ?? '').split(',').filter(Boolean)
-);
+// to turn modules off one at a time and find what drives memory or GPU use.
+const skipped = new Set((query.get('skip') ?? '').split(',').filter(Boolean));
 const runModule = (name: string, init: () => void) => {
   if (!skipped.has(name) && !skipped.has('all')) init();
 };

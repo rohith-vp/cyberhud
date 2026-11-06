@@ -120,10 +120,21 @@ http.createServer((req, res) => {
   // Server-Sent Events: pushes music state and spectrum.
   if (url.pathname === '/music') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    const send = () => res.write(`data: ${JSON.stringify(music.state())}\n\n`);
+    // Only write when the state changed, so an idle page receives nothing.
+    let lastPayload = '';
+    const send = () => {
+      const payload = JSON.stringify(music.state());
+      if (payload === lastPayload) return;
+      lastPayload = payload;
+      res.write(`data: ${payload}\n\n`);
+    };
     send();
     const timer = setInterval(send, MUSIC_PUSH_MS);
-    req.on('close', () => clearInterval(timer));
+    const keepAlive = setInterval(() => res.write(': keepalive\n\n'), 20000);
+    req.on('close', () => {
+      clearInterval(timer);
+      clearInterval(keepAlive);
+    });
     return;
   }
 
